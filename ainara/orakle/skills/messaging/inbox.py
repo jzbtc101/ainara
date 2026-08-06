@@ -92,13 +92,23 @@ class MessagingInbox(Skill):
         ] = None,
         include_dms: Annotated[bool, "Check Direct Messages"] = True,
         include_channels: Annotated[bool, "Check Server Channels"] = True,
+        confirmed: Annotated[
+            bool,
+            "For 'send' only. Must be False/omitted on the first call — this"
+            " returns a preview of the exact message and asks the user to"
+            " confirm, but does NOT send anything. Only pass confirmed=true"
+            " on a follow-up call, and only after the user has explicitly"
+            " said to send it (a plain 'ok' to something else is not"
+            " confirmation).",
+        ] = False,
     ) -> Dict[str, Any]:
         """
         Execute messaging actions.
 
         Examples:
             run(action='check', limit=20)
-            run(action='send', target='mock_messaging:user1', content='Hello there')
+            run(action='send', target='mock_messaging:user1', content='Hello there')  # returns a preview, does not send
+            run(action='send', target='mock_messaging:user1', content='Hello there', confirmed=True)  # actually sends, after user confirmed the preview
         """
         if not self.router:
             return {
@@ -117,23 +127,31 @@ class MessagingInbox(Skill):
             return {"success": True, "output": result}
 
         elif action == "send":
-            # if not target or not content:
-            #     return {
-            #         "success": False,
-            #         "error": (
-            #             "Both 'target' and 'content' are required for sending"
-            #             " messages."
-            #         ),
-            #     }
-            # result = await self.send_message(target=target, content=content)
-            # return {"success": True, "output": result}
+            if not target or not content:
+                return {
+                    "success": False,
+                    "error": (
+                        "Both 'target' and 'content' are required for sending"
+                        " messages."
+                    ),
+                }
 
-            return {
-                "success": False,
-                "error": (
-                    f"Action {action} is disabled by now."
-                ),
-            }
+            if not confirmed:
+                return {
+                    "success": True,
+                    "status": "pending_confirmation",
+                    "output": (
+                        f"Draft ready, NOT sent yet.\nTo: {target}\n\n"
+                        f"{content}\n\n"
+                        "Show this exact draft to the user and ask them to"
+                        " confirm before sending. Do not call this again"
+                        " with confirmed=true unless the user explicitly"
+                        " says to send it."
+                    ),
+                }
+
+            result = await self.send_message(target=target, content=content)
+            return {"success": True, "output": result}
 
         else:
             return {
