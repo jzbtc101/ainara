@@ -498,7 +498,7 @@ class DocumentView extends BaseComponent {
             contentArea.className = 'document-content';
             contentArea.tabIndex = 0;
 
-            if (format === "chat-history" || format === "help") {
+            if (format === "chat-history" || format === "help" || format === "agenda") {
                 contentArea.innerHTML = this.parseMarkdown(content, true);
                 // Add this line to hydrate frames
                 this.hydrateNexusFrames(contentArea);

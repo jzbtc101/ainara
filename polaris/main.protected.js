@@ -978,6 +978,18 @@ async function updateProviderSubmenu() {
             ...updateItems,
             { type: 'separator' },
             {
+                label: 'Agenda',
+                click: () => {
+                    const comRing = windowManager.getWindow('comRing');
+                    if (comRing) {
+                        if (!comRing.isVisible()) {
+                            windowManager.showAll(true);
+                        }
+                        comRing.send('show-agenda');
+                    }
+                }
+            },
+            {
                 label: 'Help',
                 click: () => {
                     const comRing = windowManager.getWindow('comRing');

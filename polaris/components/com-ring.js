@@ -728,6 +728,9 @@ class ComRing extends BaseComponent {
         ipcRenderer.on('show-about', async () => {
             await this.showAbout();
         });
+        ipcRenderer.on('show-agenda', async () => {
+            await this.showAgenda();
+        });
 
         // Start polling for notifications every minute
         this.doingNotificationPolling = false;
@@ -1524,6 +1527,82 @@ Visit our project site at: https://ainara.app
         this.switchToDocumentView('help');
         this.documentView.clear();
         this.documentView.addDocument(helpContent, 'help', helpTitle);
+    }
+
+    async showAgenda() {
+        const agendaTitle = 'Agenda';
+        this.switchToDocumentView('agenda');
+        this.documentView.clear();
+        this.documentView.addDocument('Loading agenda…', 'agenda', agendaTitle);
+
+        try {
+            const orakleUrl = this.config.get('orakle.api_url');
+            const toDateStr = (d) => d.toISOString().split('T')[0];
+            const today = new Date();
+            const weekAhead = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+            const response = await fetch(orakleUrl + '/run/tools_calendar', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    action: 'get',
+                    from_date: toDateStr(today),
+                    to_date: toDateStr(weekAhead),
+                }),
+            });
+            if (!response.ok) {
+                throw new Error(`Orakle returned ${response.status}`);
+            }
+
+            const data = await response.json();
+            const result = data.result || {};
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to load calendar events');
+            }
+
+            const events = (result.events || [])
+                .slice()
+                .sort((a, b) => a.start_dt.localeCompare(b.start_dt));
+
+            let agendaContent;
+            if (events.length === 0) {
+                agendaContent = '_No upcoming events in the next 7 days._';
+            } else {
+                const groups = new Map();
+                for (const ev of events) {
+                    const dateKey = ev.start_dt.slice(0, 10);
+                    if (!groups.has(dateKey)) groups.set(dateKey, []);
+                    groups.get(dateKey).push(ev);
+                }
+
+                const lines = [];
+                for (const [dateKey, dayEvents] of groups) {
+                    const dateObj = new Date(dateKey + 'T12:00:00');
+                    const heading = dateObj.toLocaleDateString(undefined, {
+                        weekday: 'long', month: 'short', day: 'numeric',
+                    });
+                    lines.push(`### ${heading}`);
+                    for (const ev of dayEvents) {
+                        const timeStr = ev.all_day ? 'All day' : ev.start_dt.slice(11, 16);
+                        let line = `- **${timeStr}** ${ev.title}`;
+                        if (ev.location) line += ` — ${ev.location}`;
+                        lines.push(line);
+                    }
+                }
+                agendaContent = lines.join('\n');
+            }
+
+            this.documentView.clear();
+            this.documentView.addDocument(agendaContent, 'agenda', agendaTitle);
+        } catch (err) {
+            console.error('ComRing: Failed to load agenda:', err);
+            this.documentView.clear();
+            this.documentView.addDocument(
+                `_Failed to load agenda: ${err.message}_`,
+                'agenda',
+                agendaTitle,
+            );
+        }
     }
 
     async fetchAndAppendNewChatMessages() {
