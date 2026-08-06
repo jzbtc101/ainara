@@ -166,6 +166,20 @@ class ToolsCalendar(Skill):
     # INTERNAL HELPERS
     # ─────────────────────────────────────────────
 
+    def _normalize_dt(self, iso_str: Optional[str]) -> Optional[str]:
+        """Normalize a caller-supplied ISO datetime to naive local wall-clock
+        time. Everything stored and compared elsewhere in this skill assumes
+        naive local time (datetime.now() has no tzinfo); a timezone-aware
+        string (e.g. one an LLM includes like '-04:00') would otherwise crash
+        the first comparison against a naive datetime with
+        "can't compare offset-naive and offset-aware datetimes"."""
+        if not iso_str:
+            return iso_str
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone().replace(tzinfo=None)
+        return dt.isoformat()
+
     def _expand_recurrences(
         self, base_event: dict, rule: dict, from_dt: datetime, to_dt: datetime
     ) -> List[dict]:
@@ -366,6 +380,8 @@ class ToolsCalendar(Skill):
         notes: Annotated[Optional[str], "Additional notes"] = None,
     ) -> Dict[str, Any]:
         """Creates a single calendar event"""
+        start_dt = self._normalize_dt(start_dt)
+        end_dt = self._normalize_dt(end_dt)
         self.logger.info(f"CALENDAR CREATE: {title} @ {start_dt}")
         conn = self._get_conn()
         try:
@@ -406,6 +422,9 @@ class ToolsCalendar(Skill):
         notes: Annotated[Optional[str], "Additional notes"] = None,
     ) -> Dict[str, Any]:
         """Creates a recurring calendar event with a recurrence rule"""
+        start_dt = self._normalize_dt(start_dt)
+        end_dt = self._normalize_dt(end_dt)
+        end_date = self._normalize_dt(end_date)
         self.logger.info(f"CALENDAR RECURRING CREATE: {title} freq={frequency} interval={interval}")
         conn = self._get_conn()
         try:
@@ -531,6 +550,9 @@ class ToolsCalendar(Skill):
         ] = None,
     ) -> Dict[str, Any]:
         """Updates an existing event. For recurring events, choose to edit just this occurrence or all future ones."""
+        start_dt = self._normalize_dt(start_dt)
+        end_dt = self._normalize_dt(end_dt)
+        occurrence_dt = self._normalize_dt(occurrence_dt)
         self.logger.info(f"CALENDAR UPDATE: event_id={event_id} mode={edit_mode}")
         conn = self._get_conn()
         try:
@@ -634,6 +656,7 @@ class ToolsCalendar(Skill):
         ] = None,
     ) -> Dict[str, Any]:
         """Deletes an event. For recurring events, choose scope of deletion."""
+        occurrence_dt = self._normalize_dt(occurrence_dt)
         self.logger.info(f"CALENDAR DELETE: event_id={event_id} mode={delete_mode}")
         conn = self._get_conn()
         try:
