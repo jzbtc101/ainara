@@ -162,6 +162,20 @@ class ConfigManager:
     # -------------------------------------------------------------------------
     def get_default_data_dir(self, app_name="ainara"):
         """Get default platform-specific user data directory path"""
+        # First check environment variable
+        env_data_path = os.environ.get("AINARA_DATA")
+        if env_data_path:
+            data_dir = Path(os.path.expanduser(env_data_path))
+            os.makedirs(data_dir, exist_ok=True)
+            return data_dir
+
+        # Check if user has specified a data directory in config
+        if "data" in self.config and "directory" in self.config["data"]:
+            user_data_dir = self.config["data"]["directory"]
+            data_dir = Path(os.path.expanduser(user_data_dir))
+            os.makedirs(data_dir, exist_ok=True)
+            return data_dir
+
         system = platform.system()
 
         if system == "Windows":

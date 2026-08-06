@@ -109,8 +109,10 @@ class OrakleScheduler:
             # Extract trigger type, "cron" by default
             trigger_type = job_config.pop("trigger", "cron")
 
-            # Extract "default" config
-            job_config.pop("default")
+            # Extract "default" config (only present on the skill's own
+            # class-level default_schedule, not on user overrides in
+            # scheduler.overrides.<skill> in ainara.yaml)
+            job_config.pop("default", None)
 
             # Prepare explicit options for add_job
             add_job_options = {
