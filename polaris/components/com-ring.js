@@ -2244,6 +2244,12 @@ Visit our project site at: https://ainara.app
                 }
                 break;
 
+            case 'showAgenda':
+                if (event.type === 'ui') {
+                    await this.showAgenda();
+                }
+                break;
+
             case 'renderNexus':
                 if (event.type === 'ui') {
                     const orakleUrl = this.config.get('orakle.api_url');

@@ -67,12 +67,15 @@ class ToolsCalendar(Skill):
         " 'what have I got tomorrow?', 'clear my Thursday afternoon',"
         " 'set up a recurring event every 2 weeks on Tuesday',"
         " 'remind me every Monday at 9am', 'show me this week',"
-        " 'cancel next Tuesday's appointment', 'edit all future occurrences'.\n\n"
+        " 'cancel next Tuesday's appointment', 'edit all future occurrences',"
+        " 'open my agenda', 'pull up my calendar', 'show my agenda on"
+        " screen'.\n\n"
         "Keywords: calendar, event, appointment, meeting, reminder, schedule,"
         " recurring, repeat, weekly, monthly, daily, every x weeks, agenda,"
         " add event, delete event, update event, show week, show month,"
         " what's on, upcoming, all day, multi-day, recurrence, exception,"
-        " shift pattern, rotation."
+        " shift pattern, rotation, open agenda, pull up calendar, view"
+        " calendar."
     )
 
     DB_FILE = "ainara_calendar.db"
@@ -808,9 +811,33 @@ class ToolsCalendar(Skill):
         finally:
             conn.close()
 
+    async def show_agenda(self) -> Dict[str, Any]:
+        """Requests that the client open its visual Agenda view. This skill
+        cannot open UI itself (it's backend-only); it signals intent via the
+        ui_action marker, which orakle_middleware/chat_manager relay to the
+        frontend as a 'showAgenda' UI event. Polaris fetches its own copy of
+        the events client-side, so what's returned here is only used for the
+        chat confirmation message, not to populate the view."""
+        today = datetime.now()
+        week_ahead = today + timedelta(days=7)
+        events_result = await self.get_events(
+            from_date=today.strftime("%Y-%m-%d"),
+            to_date=week_ahead.strftime("%Y-%m-%d"),
+        )
+        if not events_result.get("success"):
+            return events_result
+
+        count = events_result.get("count", 0)
+        events_result["ui_action"] = "showAgenda"
+        events_result["message"] = (
+            "Here's your agenda." if count
+            else "Opened your agenda — nothing on it for the next 7 days."
+        )
+        return events_result
+
     async def run(
         self,
-        action: Annotated[str, "Action to perform: create/create_recurring/get/update/delete/check_reminders"],
+        action: Annotated[str, "Action to perform: create/create_recurring/get/update/delete/check_reminders/show_agenda"],
         title: Annotated[Optional[str], "Event title"] = None,
         start_dt: Annotated[Optional[str], "Start datetime ISO format"] = None,
         end_dt: Annotated[Optional[str], "End datetime ISO format"] = None,
@@ -842,7 +869,8 @@ class ToolsCalendar(Skill):
         Examples:
             action="create", title="Team standup", start_dt="2026-07-28T09:00", end_dt="2026-07-28T09:30"
             action="create_recurring", title="Night Shift", frequency="every_x_weeks", interval=9
-            action="get", from_date="2026-07-28", to_date="2026-08-03"
+            action="get", from_date="2026-07-28", to_date="2026-08-03"  # spoken/text answer about events, does not open any UI
+            action="show_agenda"  # opens the visual Agenda view in Polaris; use when the user asks to see/open/pull up their agenda or calendar, not just what's on it
             action="update", event_id=5, title="Updated title", edit_mode="this_only", occurrence_dt="2026-08-04T09:00:00"
             action="update", event_id=5, start_dt="2026-08-11T10:00", edit_mode="all_future", occurrence_dt="2026-08-11T09:00:00"
             action="delete", event_id=5, delete_mode="all"
@@ -884,12 +912,14 @@ class ToolsCalendar(Skill):
             )
         elif action == "check_reminders":
             return await self.check_reminders()
+        elif action == "show_agenda":
+            return await self.show_agenda()
         else:
             return {
                 "success": False,
                 "error": f"Unknown action '{action}'",
                 "valid_actions": [
                     "create", "create_recurring", "get", "update", "delete",
-                    "check_reminders",
+                    "check_reminders", "show_agenda",
                 ],
             }

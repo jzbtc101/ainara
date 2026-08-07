@@ -1109,6 +1109,28 @@ IMPORTANT: If multiple skills seem equally relevant for the user's intent, alway
                 selected_skill_id, parameters, chat_history
             )
 
+            # Any skill (not just Nexus/user skills with a registered UI
+            # component) can request a lightweight client-side UI action —
+            # e.g. opening an existing Polaris view — by including a
+            # "ui_action" marker in its JSON result, without needing a full
+            # iframe-based Nexus component. call_skill() returns the raw
+            # HTTP response body, which Orakle wraps as {"result": {...}},
+            # so the marker has to be unwrapped from that envelope first.
+            try:
+                ui_action_probe = json.loads(result)
+                if isinstance(ui_action_probe, dict) and "result" in ui_action_probe:
+                    ui_action_probe = ui_action_probe["result"]
+            except (json.JSONDecodeError, TypeError):
+                ui_action_probe = None
+
+            if isinstance(ui_action_probe, dict) and ui_action_probe.get("ui_action"):
+                yield {
+                    "type": "ui_action",
+                    "action": ui_action_probe["ui_action"],
+                    "data": ui_action_probe,
+                }
+                return
+
             # If the skill is a nexus skill with a UI, yield the component data directly
             if (
                 skill_info

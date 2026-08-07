@@ -1918,6 +1918,27 @@ class ChatManager:
                     yield ndjson("ui", "renderNexus", nexus_data)
                     continue
 
+                if (
+                    isinstance(chunk, dict)
+                    and chunk.get("type") == "ui_action"
+                ):
+                    ui_action_name = chunk.get("action")
+                    ui_action_data = chunk.get("data", {})
+
+                    if not ui_action_name:
+                        logger.error("UI action chunk received with no action name.")
+                        continue
+
+                    # Mirror the nexus_skill_result path above: just relay
+                    # the UI signal (proven working), and only feed the
+                    # confirmation text into chat history — not as a live
+                    # stream chunk, whose expected nested shape belongs to
+                    # the TTS/audio pipeline and isn't worth replicating here.
+                    confirmation = ui_action_data.get("message") or "Done."
+                    processed_answer += confirmation
+                    yield ndjson("ui", ui_action_name, ui_action_data)
+                    continue
+
                 if not chunk:
                     continue
 
