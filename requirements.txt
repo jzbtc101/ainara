@@ -243,6 +243,8 @@ huggingface-hub==1.6.0
     #   fastembed
     #   faster-whisper
     #   tokenizers
+icalendar==7.2.2
+    # via -r requirements.in
 idna==3.11
     # via
     #   anyio
@@ -534,6 +536,7 @@ python-dateutil==2.9.0.post0
     #   csvw
     #   dateparser
     #   htmldate
+    #   icalendar
     #   kubernetes
     #   matplotlib
     #   pandas
@@ -726,6 +729,7 @@ typing-extensions==4.15.0
     #   fastapi
     #   grpcio
     #   huggingface-hub
+    #   icalendar
     #   mcp
     #   openai
     #   opentelemetry-api
@@ -749,7 +753,9 @@ typing-inspection==0.4.2
     #   pydantic
     #   pydantic-settings
 tzdata==2025.3
-    # via pandas
+    # via
+    #   icalendar
+    #   pandas
 tzlocal==5.3.1
     # via
     #   apscheduler

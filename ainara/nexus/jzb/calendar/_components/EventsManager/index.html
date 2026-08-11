@@ -1,0 +1,1710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Calendar</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:         #1a1a2e;
+    --panel:      #16213e;
+    --panel-2:    #0f3460;
+    --input:      #12172b;
+    --line:       #2d3748;
+    --line-soft:  #212938;
+    --text:       #eaeaea;
+    --dim:        #a0aec0;
+    --muted:      #718096;
+    --accent:     #e94560;
+    --accent-2:   #c73652;
+    --ok:         #48bb78;
+    --warn:       #ed8936;
+    --info:       #63b3ed;
+    --radius:     10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 12px 14px 24px;
+  }
+
+  /* ---------- top bar ---------- */
+  .topbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+            margin-bottom: 10px; }
+  .topbar h1 { font-size: 15px; font-weight: 600; }
+  .spacer { flex: 1 1 auto; }
+  .ctl { display: flex; align-items: center; gap: 8px; font-size: 11px;
+         color: var(--dim); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
+         display: inline-block; }
+  .dot.live { background: var(--ok); }
+  .dot.busy { background: var(--info); animation: pulse .9s ease-in-out infinite; }
+  .dot.err  { background: var(--accent); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+  /* ---------- view switcher ---------- */
+  .views { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap;
+           align-items: center; }
+  .tab-btn {
+    background: var(--panel); border: 1px solid var(--line); color: var(--dim);
+    padding: 6px 15px; border-radius: 20px; cursor: pointer; font: inherit;
+    font-size: 12px;
+  }
+  .tab-btn:hover { border-color: var(--accent); color: var(--text); }
+  .tab-btn[aria-selected="true"] {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+    font-weight: 600;
+  }
+
+  /* ---------- period navigation ---------- */
+  .nav { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .nav button {
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 4px 11px; cursor: pointer; font: inherit;
+    font-size: 12px;
+  }
+  .nav button:hover { border-color: var(--accent); }
+  .nav .period { font-size: 13px; font-weight: 600; margin-left: 4px; }
+
+  /* ---------- filters ---------- */
+  .filters { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;
+             align-items: center; }
+  select, input, textarea {
+    background: var(--input); border: 1px solid var(--line); color: var(--text);
+    padding: 6px 10px; border-radius: var(--radius); font: inherit; outline: none;
+  }
+  select:focus, input:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 62px; width: 100%; }
+
+  .btn {
+    padding: 6px 15px; border-radius: var(--radius); border: 1px solid transparent;
+    cursor: pointer; font: inherit; font-size: 12px; font-weight: 600;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-2); }
+  .btn-secondary { background: var(--panel-2); color: var(--text); border-color: var(--line); }
+  .btn-secondary:hover { border-color: var(--accent); }
+  .btn-danger { background: transparent; color: var(--accent); border-color: var(--accent); }
+  .btn-danger:hover { background: var(--accent); color: #fff; }
+  .btn-sm { padding: 3px 9px; font-size: 11px; font-weight: 500; }
+
+  /* ---------- stats ---------- */
+  .stats { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .chip {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 20px;
+    padding: 4px 12px; font-size: 11px; color: var(--dim);
+  }
+  .chip b { color: var(--text); }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ================= TIME GRID (day + week) ================= */
+  .tg { border: 1px solid var(--line); border-radius: var(--radius);
+        overflow: hidden; background: var(--panel); }
+  .tg-head, .tg-allday, .tg-grid { display: grid; }
+  .tg-head {
+    border-bottom: 1px solid var(--line); background: var(--panel-2);
+  }
+  .tg-corner { border-right: 1px solid var(--line); }
+  .tg-dayhead {
+    padding: 6px 8px; font-size: 11px; color: var(--dim); text-align: center;
+    border-right: 1px solid var(--line-soft);
+  }
+  .tg-dayhead:last-child { border-right: none; }
+  .tg-dayhead b { display: block; font-size: 15px; color: var(--text);
+                  font-weight: 600; }
+  .tg-dayhead.today b { color: var(--accent); }
+  .tg-dayhead.today { background: rgba(233,69,96,.08); }
+
+  .tg-allday { border-bottom: 1px solid var(--line); min-height: 26px; }
+  .tg-allday-label {
+    font-size: 9px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .05em; padding: 6px 4px; text-align: right;
+    border-right: 1px solid var(--line);
+  }
+  .tg-allday-cell { padding: 4px; border-right: 1px solid var(--line-soft);
+                    display: flex; flex-direction: column; gap: 3px; }
+  .tg-allday-cell:last-child { border-right: none; }
+
+  .tg-scroll { overflow-y: auto; max-height: min(60vh, 620px); min-height: 300px; }
+  .tg-grid { position: relative; }
+  .tg-gutter { border-right: 1px solid var(--line); position: relative; }
+  .tg-hour-label {
+    position: absolute; right: 6px; font-size: 10px; color: var(--muted);
+    transform: translateY(-50%);
+  }
+  .tg-col { position: relative; border-right: 1px solid var(--line-soft); }
+  .tg-col:last-child { border-right: none; }
+  .tg-col.today { background: rgba(233,69,96,.04); }
+  .tg-hourline { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line-soft); }
+  .tg-hourline.major { border-top-color: var(--line); }
+
+  .tg-block {
+    position: absolute; overflow: hidden; cursor: pointer;
+    border-radius: 5px; padding: 2px 5px;
+    background: var(--panel-2); border: 1px solid var(--info);
+    border-left: 3px solid var(--info);
+    font-size: 11px; line-height: 1.25;
+  }
+  .tg-block:hover { filter: brightness(1.25); z-index: 5; }
+  .tg-block.p-high { border-color: var(--warn); border-left-color: var(--warn); }
+  .tg-block.p-low  { border-color: var(--muted); border-left-color: var(--muted); }
+  .tg-block .t { font-weight: 600; color: var(--text);
+                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tg-block .h { color: var(--dim); font-size: 10px; }
+  .tg-block.cont-before { border-top-style: dashed; border-top-left-radius: 0;
+                          border-top-right-radius: 0; }
+  .tg-block.cont-after  { border-bottom-style: dashed; border-bottom-left-radius: 0;
+                          border-bottom-right-radius: 0; }
+
+  .chip-ev {
+    background: var(--panel-2); border-left: 3px solid var(--info);
+    border-radius: 4px; padding: 1px 6px; font-size: 10px; cursor: pointer;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .chip-ev:hover { filter: brightness(1.3); }
+  .chip-ev.p-high { border-left-color: var(--warn); }
+  .chip-ev.p-low  { border-left-color: var(--muted); }
+
+  .now-line { position: absolute; left: 0; right: 0; height: 0;
+              border-top: 2px solid var(--accent); z-index: 4; pointer-events: none; }
+  .now-line::before {
+    content: ""; position: absolute; left: -3px; top: -4px; width: 6px; height: 6px;
+    border-radius: 50%; background: var(--accent);
+  }
+
+  /* ================= MONTH GRID ================= */
+  .mg { display: grid; grid-template-columns: repeat(7, 1fr);
+        border: 1px solid var(--line); border-radius: var(--radius);
+        overflow: hidden; background: var(--panel); }
+  .mg-dow {
+    padding: 6px 4px; text-align: center; font-size: 10px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: .05em; background: var(--panel-2);
+    border-bottom: 1px solid var(--line);
+  }
+  .mg-cell {
+    min-height: 92px; padding: 4px; border-right: 1px solid var(--line-soft);
+    border-bottom: 1px solid var(--line-soft); display: flex;
+    flex-direction: column; gap: 2px;
+  }
+  .mg-cell:nth-child(7n+7) { border-right: none; }
+  .mg-cell.other { background: rgba(0,0,0,.18); }
+  .mg-cell.other .mg-daynum { color: var(--muted); }
+  .mg-daynum {
+    font-size: 11px; color: var(--dim); font-weight: 600; cursor: pointer;
+    align-self: flex-start; padding: 1px 5px; border-radius: 10px;
+  }
+  .mg-daynum:hover { background: var(--line); color: var(--text); }
+  .mg-cell.today .mg-daynum { background: var(--accent); color: #fff; }
+  .mg-more { font-size: 10px; color: var(--dim); cursor: pointer; padding-left: 3px; }
+  .mg-more:hover { color: var(--accent); }
+
+  /* ================= LIST ================= */
+  .day-head {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--dim); margin: 16px 0 7px; padding-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .day-head:first-child { margin-top: 0; }
+  .day-head .today { color: var(--accent); font-weight: 700; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--info); border-radius: var(--radius);
+    padding: 10px 12px; margin-bottom: 7px;
+    display: flex; gap: 10px; align-items: flex-start;
+  }
+  .card:hover { border-left-color: var(--accent); }
+  .card.p-high { border-left-color: var(--warn); }
+  .card.p-low  { border-left-color: var(--muted); }
+  .card-main { flex: 1 1 auto; min-width: 0; }
+  .card-title { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .card-when { font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+  .card-desc { font-size: 12px; color: var(--muted); margin-bottom: 5px;
+               white-space: pre-wrap; }
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; }
+  .tag {
+    font-size: 10px; padding: 1px 7px; border-radius: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .03em;
+    background: rgba(99,179,237,.15); color: var(--info);
+  }
+  .tag.rec  { background: rgba(72,187,120,.15); color: var(--ok); }
+  .tag.imp  { background: rgba(160,174,192,.15); color: var(--dim); }
+  /* Imported events read as slightly recessed — they can be looked at but
+     not edited here. */
+  .card.imported { border-left-style: dashed; }
+  .tg-block.imported, .chip-ev.imported { border-left-style: dashed; opacity: .92; }
+  .tag.high { background: rgba(237,137,54,.15); color: var(--warn); }
+  .tag.low  { background: rgba(113,128,150,.15); color: var(--muted); }
+  .card-actions { display: flex; gap: 5px; flex: 0 0 auto; }
+
+  .confirm {
+    background: var(--panel-2); border: 1px solid var(--accent);
+    border-radius: var(--radius); padding: 9px 11px; margin-bottom: 7px;
+  }
+  .confirm p { font-size: 12px; margin-bottom: 8px; }
+  .confirm .row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .empty { text-align: center; padding: 40px 16px; color: var(--muted); }
+  .empty .ico { font-size: 30px; margin-bottom: 8px; }
+
+  /* ---------- forms ---------- */
+  .form-card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 18px; max-width: 640px;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .fg { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .fg.full { grid-column: 1 / -1; }
+  .fg > label {
+    font-size: 10px; color: var(--dim); font-weight: 600;
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .inline { display: flex; align-items: center; gap: 7px; font-size: 12px;
+            color: var(--text); }
+  .inline input[type=checkbox] { width: auto; accent-color: var(--accent); }
+  .days { display: flex; gap: 4px; flex-wrap: wrap; }
+  .days button {
+    font: inherit; font-size: 11px; padding: 3px 8px; border-radius: 6px;
+    background: var(--input); border: 1px solid var(--line); color: var(--dim);
+    cursor: pointer;
+  }
+  .days button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  .hint { font-size: 11px; color: var(--muted); }
+
+  /* ---------- modal ---------- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.72); z-index: 100;
+    display: none; align-items: flex-start; justify-content: center;
+    padding: 24px 14px; overflow-y: auto;
+  }
+  .overlay.open { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 18px; width: 100%; max-width: 580px;
+  }
+  .modal-head { display: flex; align-items: center; justify-content: space-between;
+                margin-bottom: 14px; }
+  .modal-head h2 { font-size: 14px; font-weight: 600; }
+  .x { background: none; border: none; color: var(--muted); font-size: 18px;
+       cursor: pointer; line-height: 1; padding: 2px 5px; border-radius: 4px; }
+  .x:hover { color: var(--text); background: var(--line); }
+  .scope-note {
+    background: var(--panel-2); border-left: 3px solid var(--ok);
+    border-radius: 6px; padding: 8px 10px; margin-bottom: 12px; font-size: 11px;
+    color: var(--dim);
+  }
+  #e-delete-confirm {
+    background: var(--panel-2); border: 1px solid var(--accent);
+    border-radius: 6px; padding: 9px 11px; margin-top: 12px;
+  }
+  #e-delete-confirm p { font-size: 12px; margin-bottom: 8px; }
+  #e-delete-confirm .row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* ---------- toast ---------- */
+  #toast {
+    position: fixed; bottom: 18px; right: 18px; max-width: 320px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-left: 3px solid var(--info); border-radius: var(--radius);
+    padding: 10px 16px; font-size: 12px; opacity: 0; transform: translateY(8px);
+    transition: opacity .25s, transform .25s; pointer-events: none; z-index: 200;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+  #toast.ok  { border-left-color: var(--ok); }
+  #toast.err { border-left-color: var(--accent); }
+
+  @media (max-width: 540px) {
+    .grid { grid-template-columns: 1fr; }
+    .fg.full { grid-column: 1; }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Calendar</h1>
+  <span class="spacer"></span>
+  <span class="ctl"><span class="dot" id="dot"></span><span id="age">waiting for data</span></span>
+  <button class="btn btn-secondary btn-sm" id="refresh">Refresh</button>
+</div>
+
+<div class="views" role="tablist">
+  <button class="tab-btn" id="tab-day"   role="tab" aria-selected="false">Day</button>
+  <button class="tab-btn" id="tab-week"  role="tab" aria-selected="true">Week</button>
+  <button class="tab-btn" id="tab-month" role="tab" aria-selected="false">Month</button>
+  <button class="tab-btn" id="tab-list"  role="tab" aria-selected="false">List</button>
+  <span class="spacer"></span>
+  <button class="tab-btn" id="tab-feeds" role="tab" aria-selected="false">Feeds</button>
+  <button class="tab-btn" id="tab-new" role="tab" aria-selected="false">+ New event</button>
+</div>
+
+<div class="nav" id="navbar">
+  <button id="nav-prev" title="Previous">&#8249;</button>
+  <button id="nav-today">Today</button>
+  <button id="nav-next" title="Next">&#8250;</button>
+  <span class="period" id="period-label"></span>
+</div>
+
+<div class="filters" id="filterbar">
+  <select id="f-category"></select>
+  <select id="f-priority">
+    <option value="">All priorities</option>
+    <option value="high">High</option>
+    <option value="normal">Normal</option>
+    <option value="low">Low</option>
+  </select>
+  <select id="f-source" title="Show events from">
+    <option value="">Mine + imported</option>
+    <option value="local">Mine only</option>
+    <option value="feed">Imported only</option>
+  </select>
+  <span id="list-filters" hidden>
+    <select id="f-days">
+      <option value="7">Next 7 days</option>
+      <option value="14">Next 14 days</option>
+      <option value="30" selected>Next 30 days</option>
+      <option value="90">Next 90 days</option>
+    </select>
+    <input type="date" id="f-from" title="From (overrides the range above)">
+    <input type="date" id="f-to" title="To">
+    <button class="btn btn-secondary btn-sm" id="f-apply">Apply range</button>
+  </span>
+</div>
+
+<div class="stats" id="stats"></div>
+
+<!-- ======================== TIME GRID (day/week) ======================= -->
+<div class="panel" id="panel-grid"></div>
+
+<!-- ============================== MONTH =============================== -->
+<div class="panel" id="panel-month"></div>
+
+<!-- =============================== LIST =============================== -->
+<div class="panel" id="panel-list">
+  <div class="empty"><div class="ico">&#8987;</div><p>Loading&hellip;</p></div>
+</div>
+
+<!-- =============================== FEEDS =============================== -->
+<div class="panel" id="panel-feeds">
+  <div class="form-card" style="margin-bottom:14px">
+    <div class="grid">
+      <div class="fg full">
+        <label for="fd-url">Subscribe to a calendar</label>
+        <input type="password" id="fd-url" placeholder="https://calendar.google.com/calendar/ical/…/basic.ics">
+        <span class="hint">
+          Google Calendar → Settings → Settings for my calendars → your calendar →
+          Integrate calendar → <b>Secret address in iCal format</b>.
+          Anyone holding this address can read the whole calendar, so it is stored
+          masked and never shown again.
+        </span>
+      </div>
+      <div class="fg">
+        <label for="fd-name">Name</label>
+        <input type="text" id="fd-name" placeholder="Google">
+      </div>
+      <div class="fg">
+        <label for="fd-back">Import history (days back)</label>
+        <input type="number" id="fd-back" value="0" min="0" max="3650">
+        <span class="hint">0 = upcoming only.</span>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="fd-add">Add feed</button>
+      <button class="btn btn-secondary" id="fd-sync">Sync all now</button>
+    </div>
+  </div>
+
+  <div class="form-card" style="margin-bottom:14px">
+    <div class="grid">
+      <div class="fg full">
+        <label for="fd-path">Import a file once</label>
+        <input type="text" id="fd-path" placeholder="C:\Users\…\calendar.ics  or  …ical.zip">
+        <span class="hint">
+          For backfilling an export that reaches further back than a subscription's
+          window. Imported once, never re-synced, and never deleted by a later sync.
+        </span>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-secondary" id="fd-import">Import file</button>
+    </div>
+  </div>
+
+  <div id="fd-list"></div>
+</div>
+
+<!-- =============================== NEW ================================ -->
+<div class="panel" id="panel-new">
+  <div class="form-card">
+    <div class="grid">
+      <div class="fg full">
+        <label for="c-title">Title *</label>
+        <input type="text" id="c-title" placeholder="Event title">
+      </div>
+      <div class="fg">
+        <label for="c-date">Date *</label>
+        <input type="date" id="c-date">
+      </div>
+      <div class="fg">
+        <label>All day</label>
+        <span class="inline"><input type="checkbox" id="c-allday"><label for="c-allday">Runs all day</label></span>
+      </div>
+      <div class="fg">
+        <label for="c-start">Start time</label>
+        <input type="time" id="c-start" value="09:00">
+      </div>
+      <div class="fg">
+        <label for="c-end">End time</label>
+        <input type="time" id="c-end" value="10:00">
+      </div>
+      <div class="fg">
+        <label for="c-category">Category</label>
+        <select id="c-category"></select>
+      </div>
+      <div class="fg">
+        <label for="c-priority">Priority</label>
+        <select id="c-priority">
+          <option value="low">Low</option>
+          <option value="normal" selected>Normal</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div class="fg full">
+        <label for="c-location">Location</label>
+        <input type="text" id="c-location" placeholder="Optional">
+      </div>
+      <div class="fg full">
+        <label for="c-description">Description</label>
+        <textarea id="c-description" placeholder="Optional notes&hellip;"></textarea>
+      </div>
+
+      <div class="fg full">
+        <label for="c-freq">Repeats</label>
+        <select id="c-freq">
+          <option value="">Does not repeat</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="every_x_weeks">Every X weeks</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="fg" id="c-interval-wrap" hidden>
+        <label for="c-interval">Every (units)</label>
+        <input type="number" id="c-interval" value="1" min="1" max="52">
+      </div>
+      <div class="fg" id="c-until-wrap" hidden>
+        <label for="c-until">Repeat until</label>
+        <input type="date" id="c-until">
+      </div>
+      <div class="fg" id="c-count-wrap" hidden>
+        <label for="c-count">Or stop after N times</label>
+        <input type="number" id="c-count" min="1" max="999" placeholder="unlimited">
+      </div>
+      <div class="fg full" id="c-days-wrap" hidden>
+        <label>On these days</label>
+        <div class="days" id="c-days"></div>
+        <span class="hint">Leave all off to repeat on the same weekday as the start date.</span>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="c-save">Create event</button>
+      <button class="btn btn-secondary" id="c-clear">Clear</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ EDIT MODAL ============================ -->
+<div class="overlay" id="edit-overlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="edit-modal-title">Edit event</h2>
+      <button class="x" id="e-close">&#10005;</button>
+    </div>
+    <div class="scope-note" id="e-readonly-note" hidden
+         style="border-left-color: var(--info)">
+      Imported from a subscribed calendar, so it is read-only here — the next
+      sync would overwrite any change. Edit it in the source calendar instead.
+    </div>
+    <div class="scope-note" id="e-scope-note" hidden>
+      <div style="margin-bottom:7px">This event is part of a repeating series.</div>
+      <select id="e-scope">
+        <option value="this_only">Change only this occurrence</option>
+        <option value="all_future">Change this and all future occurrences</option>
+        <option value="all">Change the whole series</option>
+      </select>
+    </div>
+    <div class="grid">
+      <div class="fg full">
+        <label for="e-title">Title *</label>
+        <input type="text" id="e-title">
+      </div>
+      <div class="fg">
+        <label for="e-date">Date *</label>
+        <input type="date" id="e-date">
+      </div>
+      <div class="fg">
+        <label>All day</label>
+        <span class="inline"><input type="checkbox" id="e-allday"><label for="e-allday">Runs all day</label></span>
+      </div>
+      <div class="fg">
+        <label for="e-start">Start time</label>
+        <input type="time" id="e-start">
+      </div>
+      <div class="fg">
+        <label for="e-end">End time</label>
+        <input type="time" id="e-end">
+      </div>
+      <div class="fg">
+        <label for="e-category">Category</label>
+        <select id="e-category"></select>
+      </div>
+      <div class="fg">
+        <label for="e-priority">Priority</label>
+        <select id="e-priority">
+          <option value="low">Low</option>
+          <option value="normal">Normal</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+      <div class="fg full">
+        <label for="e-location">Location</label>
+        <input type="text" id="e-location">
+      </div>
+      <div class="fg full">
+        <label for="e-description">Description</label>
+        <textarea id="e-description"></textarea>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn btn-primary" id="e-save">Save changes</button>
+      <button class="btn btn-danger" id="e-delete">Delete</button>
+      <button class="btn btn-secondary" id="e-cancel">Cancel</button>
+    </div>
+    <div id="e-delete-confirm" hidden></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // Served from Orakle's own origin inside the com-ring iframe, so a relative
+  // URL reaches the skill. Opened straight off disk for development a relative
+  // URL would resolve to file:///C:/run/..., so fall back to the default
+  // Orakle address in that case.
+  var BASE = (location.protocol === "http:" || location.protocol === "https:")
+    ? "" : "http://127.0.0.1:8100";
+
+  var CATEGORIES = ["personal", "work", "family", "health", "shift", "holiday", "other"];
+  var DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+  var DOW_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+  var PX_PER_HOUR = 44;
+  var MIN_BLOCK_PX = 18;
+  var GUTTER_PX = 52;
+  var MONTH_CHIP_LIMIT = 3;
+  var VIEW_KEY = "ainara.calendar.view";
+
+  var state = {
+    view: "week",          // day | week | month | list
+    prevCalView: "week",   // view to return to when leaving the New-event form
+    anchor: new Date(),
+    events: [],            // currently loaded events; index = data-idx everywhere
+    pendingDelete: null,   // index into state.events (list view inline confirm)
+    editing: null,         // index into state.events
+    lastAt: 0,
+    inFlight: false
+  };
+
+  function $(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  // ------------------------------------------------------------- transport
+  function api(payload) {
+    var ctl = new AbortController();
+    var to = setTimeout(function () { ctl.abort(); }, 30000);
+    setDot("busy");
+    state.inFlight = true;
+
+    return fetch(BASE + "/run/tools_calendar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: ctl.signal
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        var res = (j && j.result !== undefined) ? j.result : j;
+        if (res && res.success === false) {
+          throw new Error(res.error || "Calendar skill reported a failure");
+        }
+        return res;
+      })
+      .then(function (res) {
+        clearTimeout(to);
+        state.inFlight = false;
+        return res;
+      }, function (e) {
+        clearTimeout(to);
+        state.inFlight = false;
+        setDot("err");
+        throw e;
+      });
+  }
+
+  var toastTimer = null;
+  function toast(msg, kind) {
+    var t = $("toast");
+    t.textContent = msg;
+    t.className = "show " + (kind || "");
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.className = ""; }, 3500);
+  }
+
+  function setDot(s) { $("dot").className = "dot" + (s ? " " + s : ""); }
+
+  function tickAge() {
+    if (state.inFlight) { setDot("busy"); return; }
+    var a = $("age");
+    if (!state.lastAt) { a.textContent = "waiting for data"; return; }
+    var s = Math.round((Date.now() - state.lastAt) / 1000);
+    a.textContent = s < 2 ? "just now"
+      : (s < 90 ? s + "s ago" : Math.round(s / 60) + "m ago");
+    setDot("live");
+  }
+  setInterval(tickAge, 1000);
+
+  // ------------------------------------------------------------ date utils
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+  // Local calendar date, not toISOString() — that converts to UTC and can land
+  // on the wrong day either side of midnight.
+  function ymd(d) {
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  }
+  function todayStr() { return ymd(new Date()); }
+  function datePart(iso) { return String(iso || "").slice(0, 10); }
+  function timePart(iso) { return String(iso || "").slice(11, 16); }
+
+  function parseLocal(iso) {
+    // Stored values are naive local wall-clock ("2026-08-12T22:00:00").
+    // new Date() on that string is treated as local time by every browser we
+    // target, but build it explicitly so a stray "Z" can never shift the day.
+    var s = String(iso || "");
+    var d = s.slice(0, 10).split("-");
+    var t = s.slice(11, 19).split(":");
+    return new Date(
+      +d[0], (+d[1] || 1) - 1, +d[2] || 1,
+      +t[0] || 0, +t[1] || 0, +t[2] || 0
+    );
+  }
+
+  function addDays(d, n) {
+    var x = new Date(d.getTime());
+    x.setDate(x.getDate() + n);
+    return x;
+  }
+  function startOfWeek(d) {
+    // Monday-aligned, matching the recurrence engine's week anchor.
+    var x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    var wd = (x.getDay() + 6) % 7;
+    return addDays(x, -wd);
+  }
+  function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
+
+  function minutesInto(day, dt) {
+    return (dt.getTime() - day.getTime()) / 60000;
+  }
+
+  function dayHeading(dateStr) {
+    var d = parseLocal(dateStr + "T12:00:00");
+    var label = d.toLocaleDateString(undefined, {
+      weekday: "long", month: "short", day: "numeric"
+    });
+    return dateStr === todayStr()
+      ? '<span class="today">Today</span> &middot; ' + esc(label)
+      : esc(label);
+  }
+
+  function whenLabel(ev) {
+    if (ev.all_day) return "All day";
+    var s = timePart(ev.start_dt);
+    var e = timePart(ev.end_dt);
+    if (!s) return "";
+    if (!e || e === s) return s;
+    if (datePart(ev.end_dt) !== datePart(ev.start_dt)) {
+      return s + " \u2192 " + e + " (" + datePart(ev.end_dt) + ")";
+    }
+    return s + " \u2013 " + e;
+  }
+
+  function prioClass(ev) {
+    return (ev.priority === "high" ? " p-high"
+      : ev.priority === "low" ? " p-low" : "")
+      + (ev.source === "feed" ? " imported" : "");
+  }
+
+  // -------------------------------------------------------- recurrence I/O
+  // Which arguments a mutation needs depends on how the row relates to a
+  // series, and the two verbs do NOT agree — see tools_calendar.update_event /
+  // delete_event:
+  //   * A true occurrence is generated on the fly and shares the base event's
+  //     id, so occurrence_dt is what identifies it.
+  //   * An 'is_exception' row is a real standalone row that still carries a
+  //     recur_rule_id. Updating it needs edit_mode='all' to hit the direct
+  //     UPDATE branch (anything else spawns a second exception), while
+  //     deleting it needs 'this_only' with NO occurrence_dt to hit the plain
+  //     row DELETE ('all' would wipe the entire series).
+  function isSeriesOccurrence(ev) {
+    return !!ev.recur_rule_id && !ev.is_exception;
+  }
+  // Feed-imported events are read-only: the next sync would overwrite any
+  // local edit, so offering one would be a lie.
+  function isImported(ev) { return ev.source === "feed"; }
+  function updateArgs(ev, scope) {
+    if (!isSeriesOccurrence(ev)) return { edit_mode: "all" };
+    if (scope === "all") return { edit_mode: "all" };
+    return { edit_mode: scope, occurrence_dt: ev.start_dt };
+  }
+  function deleteArgs(ev, scope) {
+    if (!isSeriesOccurrence(ev)) return { edit_mode: "this_only" };
+    if (scope === "all") return { edit_mode: "all" };
+    return { edit_mode: scope, occurrence_dt: ev.start_dt };
+  }
+
+  // ============================ RANGE PER VIEW ============================
+  function currentRange() {
+    var a = state.anchor;
+    if (state.view === "day") {
+      return { from: ymd(a), to: ymd(a) };
+    }
+    if (state.view === "week") {
+      var s = startOfWeek(a);
+      return { from: ymd(s), to: ymd(addDays(s, 6)) };
+    }
+    if (state.view === "month") {
+      var first = startOfMonth(a);
+      var gridStart = startOfWeek(first);
+      return { from: ymd(gridStart), to: ymd(addDays(gridStart, 41)) };
+    }
+    // list
+    var from = $("f-from").value, to = $("f-to").value;
+    if (from && to) return { from: from, to: to };
+    var days = parseInt($("f-days").value, 10) || 30;
+    return { from: todayStr(), to: ymd(addDays(new Date(), days)) };
+  }
+
+  function periodLabel() {
+    var a = state.anchor;
+    if (state.view === "day") {
+      return a.toLocaleDateString(undefined, {
+        weekday: "long", day: "numeric", month: "long", year: "numeric"
+      });
+    }
+    if (state.view === "week") {
+      var s = startOfWeek(a), e = addDays(s, 6);
+      var sameYear = s.getFullYear() === e.getFullYear();
+      if (sameYear && s.getMonth() === e.getMonth()) {
+        // "Aug 10 \u2013 16, 2026" rather than letting the locale repeat the month.
+        return s.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+          + " \u2013 " + e.getDate() + ", " + e.getFullYear();
+      }
+      var opts = { day: "numeric", month: "short" };
+      if (!sameYear) opts.year = "numeric";
+      return s.toLocaleDateString(undefined, opts) + " \u2013 "
+        + e.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    }
+    if (state.view === "month") {
+      return a.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    }
+    var r = currentRange();
+    return parseLocal(r.from + "T12:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short" })
+      + " \u2013 "
+      + parseLocal(r.to + "T12:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  }
+
+  function step(dir) {
+    var a = state.anchor;
+    if (state.view === "day") state.anchor = addDays(a, dir);
+    else if (state.view === "week") state.anchor = addDays(a, 7 * dir);
+    else if (state.view === "month") {
+      state.anchor = new Date(a.getFullYear(), a.getMonth() + dir, 1);
+    }
+    load();
+  }
+
+  // ========================= SEGMENTS & LAYOUT ==========================
+  // Split each event into one segment per day it touches, clipped to that
+  // day's bounds. Without this a 22:00 -> 06:00 night shift would render as a
+  // single 8-hour block hanging off the bottom of its start day.
+  function buildSegments(events, dayStrs) {
+    var allDay = {}, timed = {};
+    dayStrs.forEach(function (k) { allDay[k] = []; timed[k] = []; });
+
+    events.forEach(function (ev, idx) {
+      var startD = parseLocal(ev.start_dt);
+      var endD = parseLocal(ev.end_dt || ev.start_dt);
+      if (endD <= startD) endD = new Date(startD.getTime() + 30 * 60000);
+
+      if (ev.all_day) {
+        var c = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
+        while (c <= endD) {
+          var k = ymd(c);
+          if (allDay[k]) allDay[k].push({ ev: ev, idx: idx });
+          c = addDays(c, 1);
+        }
+        return;
+      }
+
+      var cur = new Date(startD.getFullYear(), startD.getMonth(), startD.getDate());
+      while (cur <= endD) {
+        var key = ymd(cur);
+        if (timed[key]) {
+          var dayStart = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate());
+          var dayEnd = addDays(dayStart, 1);
+          var segS = startD > dayStart ? startD : dayStart;
+          var segE = endD < dayEnd ? endD : dayEnd;
+          if (segE > segS) {
+            timed[key].push({
+              ev: ev, idx: idx,
+              startMin: minutesInto(dayStart, segS),
+              endMin: minutesInto(dayStart, segE),
+              contBefore: segS > startD,
+              contAfter: segE < endD
+            });
+          }
+        }
+        cur = addDays(cur, 1);
+      }
+    });
+    return { allDay: allDay, timed: timed };
+  }
+
+  // Standard sweep: cluster anything that overlaps, then give each segment the
+  // lowest free column inside its cluster. Cluster width decides block width.
+  function layoutDay(segs) {
+    segs.sort(function (a, b) {
+      return a.startMin - b.startMin || b.endMin - a.endMin;
+    });
+    var clusters = [], cur = [], curEnd = -1;
+    segs.forEach(function (s) {
+      if (cur.length && s.startMin >= curEnd) {
+        clusters.push(cur); cur = []; curEnd = -1;
+      }
+      cur.push(s);
+      curEnd = Math.max(curEnd, s.endMin);
+    });
+    if (cur.length) clusters.push(cur);
+
+    clusters.forEach(function (cl) {
+      var colEnds = [];
+      cl.forEach(function (s) {
+        var placed = -1;
+        for (var i = 0; i < colEnds.length; i++) {
+          if (s.startMin >= colEnds[i]) { placed = i; break; }
+        }
+        if (placed === -1) { colEnds.push(s.endMin); placed = colEnds.length - 1; }
+        else colEnds[placed] = s.endMin;
+        s.col = placed;
+      });
+      cl.forEach(function (s) { s.cols = colEnds.length; });
+    });
+    return segs;
+  }
+
+  // ============================== TIME GRID ==============================
+  function renderTimeGrid(events, dayDates) {
+    var dayStrs = dayDates.map(ymd);
+    var segs = buildSegments(events, dayStrs);
+    var cols = "grid-template-columns:" + GUTTER_PX + "px repeat(" + dayDates.length + ",1fr);";
+    var today = todayStr();
+    var html = '<div class="tg">';
+
+    // ---- day headers
+    html += '<div class="tg-head" style="' + cols + '"><div class="tg-corner"></div>';
+    dayDates.forEach(function (d) {
+      var k = ymd(d);
+      html += '<div class="tg-dayhead' + (k === today ? " today" : "") + '">'
+        + DOW_SHORT[(d.getDay() + 6) % 7]
+        + "<b>" + d.getDate() + "</b></div>";
+    });
+    html += "</div>";
+
+    // ---- all-day strip
+    html += '<div class="tg-allday" style="' + cols + '">'
+      + '<div class="tg-allday-label">all-day</div>';
+    dayStrs.forEach(function (k) {
+      html += '<div class="tg-allday-cell">';
+      segs.allDay[k].forEach(function (a) {
+        html += '<div class="chip-ev' + prioClass(a.ev) + '" data-edit="' + a.idx + '" title="'
+          + esc(a.ev.title) + '">' + esc(a.ev.title) + "</div>";
+      });
+      html += "</div>";
+    });
+    html += "</div>";
+
+    // ---- scrollable hour body
+    var bodyH = 24 * PX_PER_HOUR;
+    html += '<div class="tg-scroll" id="tg-scroll"><div class="tg-grid" style="'
+      + cols + "height:" + bodyH + 'px;">';
+
+    html += '<div class="tg-gutter">';
+    for (var h = 1; h < 24; h++) {
+      html += '<div class="tg-hour-label" style="top:' + (h * PX_PER_HOUR) + 'px">'
+        + pad(h) + ":00</div>";
+    }
+    html += "</div>";
+
+    dayStrs.forEach(function (k, di) {
+      var isToday = k === today;
+      html += '<div class="tg-col' + (isToday ? " today" : "") + '" data-day="' + k + '">';
+      for (var i = 1; i < 24; i++) {
+        html += '<div class="tg-hourline' + (i % 6 === 0 ? " major" : "")
+          + '" style="top:' + (i * PX_PER_HOUR) + 'px"></div>';
+      }
+
+      layoutDay(segs.timed[k]).forEach(function (s) {
+        var top = (s.startMin / 60) * PX_PER_HOUR;
+        var h = Math.max(((s.endMin - s.startMin) / 60) * PX_PER_HOUR, MIN_BLOCK_PX);
+        var w = 100 / s.cols;
+        var cls = "tg-block" + prioClass(s.ev)
+          + (s.contBefore ? " cont-before" : "") + (s.contAfter ? " cont-after" : "");
+        var hh = timePart(s.ev.start_dt) + " \u2013 " + timePart(s.ev.end_dt);
+        html += '<div class="' + cls + '" data-edit="' + s.idx + '"'
+          + ' style="top:' + top.toFixed(1) + "px;height:" + h.toFixed(1) + "px;"
+          + "left:calc(" + (s.col * w).toFixed(3) + "% + 2px);"
+          + "width:calc(" + w.toFixed(3) + '% - 4px);"'
+          + ' title="' + esc(s.ev.title) + " (" + hh + ')">'
+          + '<div class="t">' + esc(s.ev.title) + "</div>"
+          + (h > 30 ? '<div class="h">' + hh + "</div>" : "")
+          + "</div>";
+      });
+
+      if (isToday) {
+        var now = new Date();
+        var nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * PX_PER_HOUR;
+        html += '<div class="now-line" style="top:' + nowTop.toFixed(1) + 'px"></div>';
+      }
+      html += "</div>";
+    });
+
+    html += "</div></div></div>";
+    $("panel-grid").innerHTML = html;
+
+    var sc = $("tg-scroll");
+    if (!sc) return;
+
+    // The hour body scrolls, the header and all-day rows don't, so the
+    // scrollbar steals width from the grid columns only. Left uncompensated
+    // the day headers drift off their columns by a full scrollbar width by
+    // the last day. Pad the unscrolled rows by the measured scrollbar so all
+    // three grids resolve to the same content width.
+    var sbw = sc.offsetWidth - sc.clientWidth;
+    if (sbw > 0) {
+      var grid = $("panel-grid");
+      grid.querySelector(".tg-head").style.paddingRight = sbw + "px";
+      grid.querySelector(".tg-allday").style.paddingRight = sbw + "px";
+    }
+
+    // Open on the working day rather than at midnight.
+    sc.scrollTop = 7 * PX_PER_HOUR;
+  }
+
+  // ============================== MONTH GRID =============================
+  function renderMonth(events) {
+    var first = startOfMonth(state.anchor);
+    var gridStart = startOfWeek(first);
+    var month = state.anchor.getMonth();
+    var today = todayStr();
+
+    var days = [];
+    for (var i = 0; i < 42; i++) days.push(addDays(gridStart, i));
+    var dayStrs = days.map(ymd);
+    var segs = buildSegments(events, dayStrs);
+
+    var html = '<div class="mg">';
+    DOW_SHORT.forEach(function (d) { html += '<div class="mg-dow">' + d + "</div>"; });
+
+    days.forEach(function (d) {
+      var k = ymd(d);
+      var cls = "mg-cell" + (d.getMonth() !== month ? " other" : "")
+        + (k === today ? " today" : "");
+      html += '<div class="' + cls + '">'
+        + '<span class="mg-daynum" data-goday="' + k + '">' + d.getDate() + "</span>";
+
+      var items = segs.allDay[k].map(function (a) {
+        return { idx: a.idx, ev: a.ev, sort: -1 };
+      }).concat(segs.timed[k].map(function (s) {
+        return { idx: s.idx, ev: s.ev, sort: s.startMin };
+      }));
+      items.sort(function (a, b) { return a.sort - b.sort; });
+
+      items.slice(0, MONTH_CHIP_LIMIT).forEach(function (it) {
+        var t = it.sort < 0 ? "" : timePart(it.ev.start_dt) + " ";
+        html += '<div class="chip-ev' + prioClass(it.ev) + '" data-edit="' + it.idx
+          + '" title="' + esc(it.ev.title) + '">' + esc(t) + esc(it.ev.title) + "</div>";
+      });
+      if (items.length > MONTH_CHIP_LIMIT) {
+        html += '<div class="mg-more" data-goday="' + k + '">+'
+          + (items.length - MONTH_CHIP_LIMIT) + " more</div>";
+      }
+      html += "</div>";
+    });
+    html += "</div>";
+    $("panel-month").innerHTML = html;
+  }
+
+  // ================================ LIST =================================
+  function cardHtml(ev, idx) {
+    var tags = '<span class="tag">' + esc(ev.category || "other") + "</span>";
+    if (ev.priority && ev.priority !== "normal") {
+      tags += '<span class="tag ' + esc(ev.priority) + '">' + esc(ev.priority) + "</span>";
+    }
+    if (ev.recur_rule_id) {
+      tags += '<span class="tag rec">' + (ev.is_exception ? "moved" : "repeats") + "</span>";
+    }
+    if (isImported(ev)) tags += '<span class="tag imp">imported</span>';
+    var when = whenLabel(ev);
+    if (ev.location) when += (when ? " \u00b7 " : "") + esc(ev.location);
+
+    var actions = isImported(ev)
+      ? '<button class="btn btn-secondary btn-sm" data-edit="' + idx + '">View</button>'
+      : '<button class="btn btn-secondary btn-sm" data-edit="' + idx + '">Edit</button>'
+        + '<button class="btn btn-danger btn-sm" data-del="' + idx + '">Delete</button>';
+
+    return '<div class="card' + prioClass(ev) + '">'
+      + '<div class="card-main">'
+        + '<div class="card-title">' + esc(ev.title) + "</div>"
+        + (when ? '<div class="card-when">' + when + "</div>" : "")
+        + (ev.description ? '<div class="card-desc">' + esc(ev.description) + "</div>" : "")
+        + '<div class="tags">' + tags + "</div>"
+      + "</div>"
+      + '<div class="card-actions">' + actions + "</div></div>";
+  }
+
+  function scopeButtons(ev, idx, attr) {
+    if (isSeriesOccurrence(ev)) {
+      return '<button class="btn btn-danger btn-sm" data-' + attr + '="this_only" data-idx="' + idx + '">Just this one</button>'
+        + '<button class="btn btn-danger btn-sm" data-' + attr + '="all_future" data-idx="' + idx + '">This and future</button>'
+        + '<button class="btn btn-danger btn-sm" data-' + attr + '="all" data-idx="' + idx + '">Whole series</button>';
+    }
+    return '<button class="btn btn-danger btn-sm" data-' + attr + '="this_only" data-idx="' + idx + '">Delete</button>';
+  }
+
+  function confirmHtml(ev, idx) {
+    return '<div class="confirm"><p>Delete <b>' + esc(ev.title) + "</b>?</p>"
+      + '<div class="row">' + scopeButtons(ev, idx, "confirm")
+      + '<button class="btn btn-secondary btn-sm" data-cancel-del="1">Keep it</button>'
+      + "</div></div>";
+  }
+
+  function renderList(events) {
+    var box = $("panel-list");
+    if (!events.length) {
+      box.innerHTML = '<div class="empty"><div class="ico">&#128197;</div>'
+        + "<p>Nothing scheduled in this window.</p></div>";
+      return;
+    }
+    var html = "", currentDay = null;
+    events.forEach(function (ev, idx) {
+      var day = datePart(ev.start_dt);
+      if (day !== currentDay) {
+        currentDay = day;
+        html += '<div class="day-head">' + dayHeading(day) + "</div>";
+      }
+      html += (state.pendingDelete === idx) ? confirmHtml(ev, idx) : cardHtml(ev, idx);
+    });
+    box.innerHTML = html;
+  }
+
+  function renderStats(events) {
+    var high = 0, recurring = 0;
+    events.forEach(function (e) {
+      if (e.priority === "high") high++;
+      if (e.recur_rule_id) recurring++;
+    });
+    var html = '<span class="chip">Events <b>' + events.length + "</b></span>";
+    if (high) html += '<span class="chip">High priority <b>' + high + "</b></span>";
+    if (recurring) html += '<span class="chip">Recurring <b>' + recurring + "</b></span>";
+    $("stats").innerHTML = html;
+  }
+
+  // ============================== RENDERING ==============================
+  function renderCurrent() {
+    var evs = state.events;
+    renderStats(evs);
+    if (state.view === "day") {
+      renderTimeGrid(evs, [new Date(state.anchor.getFullYear(),
+        state.anchor.getMonth(), state.anchor.getDate())]);
+    } else if (state.view === "week") {
+      var s = startOfWeek(state.anchor);
+      var days = [];
+      for (var i = 0; i < 7; i++) days.push(addDays(s, i));
+      renderTimeGrid(evs, days);
+    } else if (state.view === "month") {
+      renderMonth(evs);
+    } else {
+      renderList(evs);
+    }
+  }
+
+  // =============================== LOADING ===============================
+  function load() {
+    if (state.view === "new") return Promise.resolve();
+    var r = currentRange();
+    $("period-label").textContent = periodLabel();
+
+    var payload = { action: "get", from_date: r.from, to_date: r.to };
+    var cat = $("f-category").value;
+    if (cat) payload.category = cat;
+
+    return api(payload).then(function (res) {
+      var prio = $("f-priority").value;
+      var src = $("f-source").value;
+      var events = (res.events || []).slice();
+      if (prio) events = events.filter(function (e) { return e.priority === prio; });
+      if (src === "feed") events = events.filter(isImported);
+      else if (src === "local") events = events.filter(function (e) { return !isImported(e); });
+      events.sort(function (a, b) { return String(a.start_dt).localeCompare(b.start_dt); });
+      state.events = events;
+      state.pendingDelete = null;
+      state.lastAt = Date.now();
+      renderCurrent();
+      tickAge();
+    }).catch(function (e) {
+      toast("Could not load events: " + e.message, "err");
+      var target = state.view === "month" ? "panel-month"
+        : state.view === "list" ? "panel-list" : "panel-grid";
+      $(target).innerHTML = '<div class="empty"><div class="ico">&#9888;</div><p>'
+        + esc(e.message) + "</p></div>";
+    });
+  }
+
+  // ================================ CREATE ===============================
+  function buildTimes(dateStr, allDay, startTime, endTime) {
+    if (allDay) return { start_dt: dateStr + "T00:00", end_dt: dateStr + "T23:59" };
+    var s = startTime || "09:00";
+    var start = dateStr + "T" + s;
+    if (!endTime) {
+      var d = parseLocal(start + ":00");
+      d.setHours(d.getHours() + 1);
+      return { start_dt: start, end_dt: ymd(d) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes()) };
+    }
+    // An end time at or before the start means the event runs past midnight
+    // (a night shift, say) rather than ending before it began.
+    var endDate = dateStr;
+    if (endTime <= s) endDate = ymd(addDays(parseLocal(dateStr + "T12:00:00"), 1));
+    return { start_dt: start, end_dt: endDate + "T" + endTime };
+  }
+
+  function selectedDays() {
+    var out = [];
+    Array.prototype.forEach.call($("c-days").children, function (b) {
+      if (b.getAttribute("aria-pressed") === "true") out.push(b.dataset.day);
+    });
+    return out;
+  }
+
+  function createEvent() {
+    var title = $("c-title").value.trim();
+    var date = $("c-date").value;
+    if (!title || !date) { toast("Title and date are required.", "err"); return; }
+
+    var allDay = $("c-allday").checked;
+    var t = buildTimes(date, allDay, $("c-start").value, $("c-end").value);
+
+    var payload = {
+      title: title,
+      start_dt: t.start_dt,
+      end_dt: t.end_dt,
+      category: $("c-category").value,
+      priority: $("c-priority").value,
+      location: $("c-location").value.trim() || null,
+      description: $("c-description").value.trim() || null
+    };
+
+    var freq = $("c-freq").value;
+    if (freq) {
+      payload.action = "create_recurring";
+      payload.frequency = freq;
+      payload.interval = parseInt($("c-interval").value, 10) || 1;
+      var until = $("c-until").value;
+      if (until) payload.end_date = until + "T23:59";
+      var count = parseInt($("c-count").value, 10);
+      if (count > 0) payload.max_count = count;
+      var days = selectedDays();
+      if (days.length) payload.days_of_week = days;
+    } else {
+      payload.action = "create";
+      payload.all_day = allDay;
+    }
+
+    api(payload).then(function () {
+      toast("Event created.", "ok");
+      // Jump to the created event rather than back to wherever we were.
+      state.anchor = parseLocal(date + "T12:00:00");
+      clearForm();
+      switchView(state.prevCalView);
+    }).catch(function (e) {
+      toast("Could not create event: " + e.message, "err");
+    });
+  }
+
+  function clearForm() {
+    ["c-title", "c-location", "c-description", "c-until", "c-count"].forEach(function (id) {
+      $(id).value = "";
+    });
+    $("c-date").value = todayStr();
+    $("c-start").value = "09:00";
+    $("c-end").value = "10:00";
+    $("c-allday").checked = false;
+    $("c-category").value = "personal";
+    $("c-priority").value = "normal";
+    $("c-freq").value = "";
+    $("c-interval").value = 1;
+    Array.prototype.forEach.call($("c-days").children, function (b) {
+      b.setAttribute("aria-pressed", "false");
+    });
+    syncRecurrenceFields();
+    syncAllDayFields();
+  }
+
+  function syncRecurrenceFields() {
+    var freq = $("c-freq").value;
+    $("c-interval-wrap").hidden = !freq;
+    $("c-until-wrap").hidden = !freq;
+    $("c-count-wrap").hidden = !freq;
+    $("c-days-wrap").hidden = !(freq === "weekly" || freq === "every_x_weeks" || freq === "daily");
+  }
+
+  function syncAllDayFields() {
+    var off = $("c-allday").checked;
+    $("c-start").disabled = off;
+    $("c-end").disabled = off;
+  }
+
+  // Clicking empty grid space starts a new event at that moment.
+  function newEventAt(dayStr, minutes) {
+    var snapped = Math.max(0, Math.min(23 * 60 + 30, Math.round(minutes / 30) * 30));
+    var h = Math.floor(snapped / 60), m = snapped % 60;
+    clearForm();
+    $("c-date").value = dayStr;
+    $("c-start").value = pad(h) + ":" + pad(m);
+    $("c-end").value = pad((h + 1) % 24) + ":" + pad(m);
+    switchView("new");
+    $("c-title").focus();
+  }
+
+  // ================================= EDIT ================================
+  function openEdit(idx) {
+    var ev = state.events[idx];
+    if (!ev) return;
+    state.editing = idx;
+
+    $("e-title").value = ev.title || "";
+    $("e-date").value = datePart(ev.start_dt);
+    $("e-start").value = timePart(ev.start_dt);
+    $("e-end").value = timePart(ev.end_dt);
+    $("e-allday").checked = !!ev.all_day;
+    $("e-category").value = ev.category || "personal";
+    $("e-priority").value = ev.priority || "normal";
+    $("e-location").value = ev.location || "";
+    $("e-description").value = ev.description || "";
+
+    var imported = isImported(ev);
+    var isSeries = isSeriesOccurrence(ev) && !imported;
+    $("e-scope-note").hidden = !isSeries;
+    if (isSeries) $("e-scope").value = "this_only";
+
+    // Imported events open read-only: fields locked, no save, no delete.
+    ["e-title", "e-date", "e-start", "e-end", "e-category", "e-priority",
+     "e-location", "e-description"].forEach(function (id) {
+      $(id).disabled = imported;
+    });
+    $("e-save").hidden = imported;
+    $("e-delete").hidden = imported;
+    $("e-readonly-note").hidden = !imported;
+    $("edit-modal-title").textContent = imported ? "Imported event" : "Edit event";
+
+    // tools_calendar only stores all_day on one-off events — every INSERT on
+    // the recurring paths omits the column — so offering the toggle here would
+    // let a change silently fail to stick.
+    $("e-allday").disabled = isSeries;
+
+    $("e-start").disabled = $("e-allday").checked;
+    $("e-end").disabled = $("e-allday").checked;
+    $("e-delete-confirm").hidden = true;
+    $("e-delete-confirm").innerHTML = "";
+    $("edit-overlay").classList.add("open");
+  }
+
+  function closeEdit() {
+    $("edit-overlay").classList.remove("open");
+    $("e-delete-confirm").hidden = true;
+    state.editing = null;
+  }
+
+  function saveEdit() {
+    var ev = state.events[state.editing];
+    if (!ev) { closeEdit(); return; }
+
+    var title = $("e-title").value.trim();
+    var date = $("e-date").value;
+    if (!title || !date) { toast("Title and date are required.", "err"); return; }
+
+    var allDay = $("e-allday").checked;
+    var t = buildTimes(date, allDay, $("e-start").value, $("e-end").value);
+    var scope = $("e-scope-note").hidden ? "all" : $("e-scope").value;
+
+    var payload = {
+      action: "update",
+      event_id: ev.id,
+      title: title,
+      start_dt: t.start_dt,
+      end_dt: t.end_dt,
+      all_day: allDay,
+      category: $("e-category").value,
+      priority: $("e-priority").value,
+      location: $("e-location").value.trim() || null,
+      description: $("e-description").value.trim() || null
+    };
+    var args = updateArgs(ev, scope);
+    Object.keys(args).forEach(function (k) { payload[k] = args[k]; });
+
+    api(payload).then(function () {
+      toast("Event updated.", "ok");
+      closeEdit();
+      return load();
+    }).catch(function (e) {
+      toast("Could not update event: " + e.message, "err");
+    });
+  }
+
+  // ================================ DELETE ===============================
+  function doDelete(idx, scope) {
+    var ev = state.events[idx];
+    if (!ev) return;
+    var payload = { action: "delete", event_id: ev.id };
+    var args = deleteArgs(ev, scope);
+    Object.keys(args).forEach(function (k) { payload[k] = args[k]; });
+
+    api(payload).then(function () {
+      toast("Event deleted.", "ok");
+      state.pendingDelete = null;
+      closeEdit();
+      return load();
+    }).catch(function (e) {
+      toast("Could not delete event: " + e.message, "err");
+    });
+  }
+
+  // ================================= FEEDS ===============================
+  function feedRowHtml(f) {
+    var status = f.last_status || "never synced";
+    var when = f.last_sync_at ? f.last_sync_at.slice(0, 16).replace("T", " ") : "—";
+    var kind = f.kind === "file" ? "file import" : "subscription";
+    var tags = '<span class="tag">' + esc(kind) + "</span>"
+      + '<span class="tag ' + (status === "error" ? "high" : "rec") + '">'
+      + esc(status) + "</span>"
+      + (f.kind === "url" && !f.enabled ? '<span class="tag low">paused</span>' : "");
+
+    var actions = "";
+    if (f.kind === "url") {
+      actions += '<button class="btn btn-secondary btn-sm" data-feedsync="' + f.id + '">Sync</button>'
+        + '<button class="btn btn-secondary btn-sm" data-feedtoggle="' + f.id
+        + '" data-enabled="' + (f.enabled ? 1 : 0) + '">'
+        + (f.enabled ? "Pause" : "Resume") + "</button>";
+    }
+    actions += '<button class="btn btn-danger btn-sm" data-feeddel="' + f.id + '">Remove</button>';
+
+    return '<div class="card">'
+      + '<div class="card-main">'
+        + '<div class="card-title">' + esc(f.name) + "</div>"
+        + '<div class="card-when">' + esc(f.url || "local file") + " · "
+          + (f.event_count || 0) + " events · last sync " + esc(when) + "</div>"
+        + (f.last_error ? '<div class="card-desc">' + esc(f.last_error) + "</div>" : "")
+        + '<div class="tags">' + tags + "</div>"
+      + "</div>"
+      + '<div class="card-actions">' + actions + "</div></div>";
+  }
+
+  function loadFeeds() {
+    return api({ action: "list_feeds" }).then(function (res) {
+      var feeds = res.feeds || [];
+      $("fd-list").innerHTML = feeds.length
+        ? feeds.map(feedRowHtml).join("")
+        : '<div class="empty"><div class="ico">&#128225;</div>'
+          + "<p>No calendars connected yet.</p></div>";
+    }).catch(function (e) {
+      $("fd-list").innerHTML = '<div class="empty"><div class="ico">&#9888;</div><p>'
+        + esc(e.message) + "</p></div>";
+    });
+  }
+
+  // ================================= VIEWS ===============================
+  function switchView(name) {
+    if (name !== "new" && name !== "feeds") state.prevCalView = name;
+    state.view = name;
+    state.pendingDelete = null;
+
+    ["day", "week", "month", "list", "feeds", "new"].forEach(function (n) {
+      var b = $("tab-" + n);
+      if (b) b.setAttribute("aria-selected", String(n === name));
+    });
+    $("panel-grid").classList.toggle("active", name === "day" || name === "week");
+    $("panel-month").classList.toggle("active", name === "month");
+    $("panel-list").classList.toggle("active", name === "list");
+    $("panel-feeds").classList.toggle("active", name === "feeds");
+    $("panel-new").classList.toggle("active", name === "new");
+
+    var isCal = (name !== "new" && name !== "feeds");
+    $("navbar").style.display = isCal ? "flex" : "none";
+    $("filterbar").style.display = isCal ? "flex" : "none";
+    $("stats").style.display = isCal ? "flex" : "none";
+    $("list-filters").hidden = name !== "list";
+    // Only day/week/month step through periods; the list is anchored to today.
+    var showStep = (isCal && name !== "list");
+    $("nav-prev").style.display = showStep ? "" : "none";
+    $("nav-next").style.display = showStep ? "" : "none";
+
+    if (name === "feeds") { loadFeeds(); return; }
+    if (name !== "new") {
+      try { localStorage.setItem(VIEW_KEY, name); } catch (e) { /* sandboxed */ }
+      load();
+    }
+  }
+
+  // =============================== LISTENERS =============================
+  // One delegated handler covers every surface: grid blocks, month chips,
+  // list cards and the inline confirm strip all use the same data-* hooks.
+  function onBodyClick(e) {
+    var f = e.target.closest("[data-feedsync],[data-feedtoggle],[data-feeddel]");
+    if (f) {
+      if (f.dataset.feedsync !== undefined) {
+        api({ action: "sync_feeds", feed_id: parseInt(f.dataset.feedsync, 10) })
+          .then(function (r) {
+            var res = (r.results || [])[0] || {};
+            toast(res.status === "error"
+              ? "Sync failed: " + (res.error || "")
+              : "Synced: +" + (res.added || 0) + " new, "
+                + (res.removed || 0) + " removed.",
+              res.status === "error" ? "err" : "ok");
+            return loadFeeds();
+          }).catch(function (err) { toast("Sync failed: " + err.message, "err"); });
+        return;
+      }
+      if (f.dataset.feedtoggle !== undefined) {
+        api({ action: "set_feed_enabled",
+              feed_id: parseInt(f.dataset.feedtoggle, 10),
+              enabled: f.dataset.enabled !== "1" })
+          .then(loadFeeds)
+          .catch(function (err) { toast(err.message, "err"); });
+        return;
+      }
+      if (f.dataset.feeddel !== undefined) {
+        api({ action: "remove_feed", feed_id: parseInt(f.dataset.feeddel, 10) })
+          .then(function (r) {
+            toast("Removed, " + (r.events_removed || 0) + " events dropped.", "ok");
+            return loadFeeds();
+          }).catch(function (err) { toast(err.message, "err"); });
+        return;
+      }
+    }
+
+    var t = e.target.closest("[data-edit],[data-del],[data-confirm],[data-cancel-del],[data-goday],[data-mconfirm]");
+    if (t) {
+      if (t.dataset.edit !== undefined) { openEdit(parseInt(t.dataset.edit, 10)); return; }
+      if (t.dataset.goday !== undefined) {
+        state.anchor = parseLocal(t.dataset.goday + "T12:00:00");
+        switchView("day");
+        return;
+      }
+      if (t.dataset.del !== undefined) {
+        state.pendingDelete = parseInt(t.dataset.del, 10);
+        renderList(state.events);
+        return;
+      }
+      if (t.dataset.confirm !== undefined) {
+        doDelete(parseInt(t.dataset.idx, 10), t.dataset.confirm); return;
+      }
+      if (t.dataset.mconfirm !== undefined) {
+        doDelete(parseInt(t.dataset.idx, 10), t.dataset.mconfirm); return;
+      }
+      if (t.dataset.cancelDel !== undefined) {
+        state.pendingDelete = null;
+        renderList(state.events);
+        return;
+      }
+    }
+
+    // Empty space inside a day column starts a new event at that time.
+    var col = e.target.closest(".tg-col");
+    if (col && !e.target.closest(".tg-block")) {
+      var rect = col.getBoundingClientRect();
+      newEventAt(col.dataset.day, ((e.clientY - rect.top) / PX_PER_HOUR) * 60);
+    }
+  }
+
+  function fillCategorySelect(el, withAll) {
+    var html = withAll ? '<option value="">All categories</option>' : "";
+    CATEGORIES.forEach(function (c) {
+      html += '<option value="' + c + '">' + c.charAt(0).toUpperCase() + c.slice(1) + "</option>";
+    });
+    el.innerHTML = html;
+  }
+
+  function init() {
+    fillCategorySelect($("f-category"), true);
+    fillCategorySelect($("c-category"), false);
+    fillCategorySelect($("e-category"), false);
+    $("c-category").value = "personal";
+
+    $("c-days").innerHTML = DAYS.map(function (d) {
+      return '<button type="button" data-day="' + d + '" aria-pressed="false">'
+        + d.slice(0, 3).toUpperCase() + "</button>";
+    }).join("");
+    $("c-days").addEventListener("click", function (e) {
+      var b = e.target.closest("button");
+      if (!b) return;
+      b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") === "true" ? "false" : "true");
+    });
+
+    $("c-date").value = todayStr();
+
+    ["day", "week", "month", "list", "feeds", "new"].forEach(function (n) {
+      $("tab-" + n).addEventListener("click", function () { switchView(n); });
+    });
+
+    $("fd-add").addEventListener("click", function () {
+      var url = $("fd-url").value.trim();
+      if (!url) { toast("Paste the calendar's iCal address first.", "err"); return; }
+      // `|| 90` would silently discard a deliberate 0 ("upcoming only").
+      var back = parseInt($("fd-back").value, 10);
+      if (isNaN(back) || back < 0) back = 90;
+      api({ action: "add_feed", url: url,
+            name: $("fd-name").value.trim() || null,
+            horizon_back_days: back })
+        .then(function (r) {
+          // Clear immediately: the address is a credential and must not linger.
+          $("fd-url").value = ""; $("fd-name").value = "";
+          toast("Calendar connected — " + (r.added || 0) + " events imported.", "ok");
+          return loadFeeds();
+        })
+        .catch(function (e) {
+          // Deliberately left in place on failure so a retry doesn't mean
+          // fetching the address from Google again; the field is a password
+          // input, so it stays masked on screen.
+          toast("Could not connect: " + e.message
+            + " — if Orakle was just updated, restart it and try again.", "err");
+        });
+    });
+
+    $("fd-sync").addEventListener("click", function () {
+      api({ action: "sync_feeds" }).then(function (r) {
+        toast("Synced " + (r.synced || 0) + " calendar(s).", "ok");
+        return loadFeeds();
+      }).catch(function (e) { toast("Sync failed: " + e.message, "err"); });
+    });
+
+    $("fd-import").addEventListener("click", function () {
+      var p = $("fd-path").value.trim();
+      if (!p) { toast("Give the path to an .ics or .zip file.", "err"); return; }
+      api({ action: "import_file", path: p }).then(function (r) {
+        toast("Imported " + (r.added || 0) + " events ("
+          + (r.updated || 0) + " already present).", "ok");
+        $("fd-path").value = "";
+        return loadFeeds();
+      }).catch(function (e) { toast("Import failed: " + e.message, "err"); });
+    });
+
+    $("nav-prev").addEventListener("click", function () { step(-1); });
+    $("nav-next").addEventListener("click", function () { step(1); });
+    $("nav-today").addEventListener("click", function () {
+      state.anchor = new Date();
+      $("f-from").value = ""; $("f-to").value = "";
+      load();
+    });
+
+    $("refresh").addEventListener("click", function () {
+      if (state.view === "new") switchView(state.prevCalView); else load();
+    });
+    $("f-category").addEventListener("change", load);
+    $("f-priority").addEventListener("change", load);
+    $("f-source").addEventListener("change", load);
+    $("f-days").addEventListener("change", function () {
+      $("f-from").value = ""; $("f-to").value = "";
+      load();
+    });
+    $("f-apply").addEventListener("click", load);
+
+    $("c-freq").addEventListener("change", syncRecurrenceFields);
+    $("c-allday").addEventListener("change", syncAllDayFields);
+    $("c-save").addEventListener("click", createEvent);
+    $("c-clear").addEventListener("click", clearForm);
+
+    $("e-allday").addEventListener("change", function () {
+      $("e-start").disabled = this.checked;
+      $("e-end").disabled = this.checked;
+    });
+    $("e-save").addEventListener("click", saveEdit);
+    $("e-cancel").addEventListener("click", closeEdit);
+    $("e-close").addEventListener("click", closeEdit);
+    $("e-delete").addEventListener("click", function () {
+      var ev = state.events[state.editing];
+      if (!ev) return;
+      var box = $("e-delete-confirm");
+      box.innerHTML = "<p>Delete <b>" + esc(ev.title) + "</b>?</p><div class=\"row\">"
+        + scopeButtons(ev, state.editing, "mconfirm")
+        + '<button class="btn btn-secondary btn-sm" id="e-del-cancel">Keep it</button></div>';
+      box.hidden = false;
+      $("e-del-cancel").addEventListener("click", function () { box.hidden = true; });
+    });
+    $("edit-overlay").addEventListener("click", function (e) {
+      if (e.target === this) closeEdit();
+    });
+
+    document.body.addEventListener("click", onBodyClick);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && $("edit-overlay").classList.contains("open")) closeEdit();
+    });
+
+    syncRecurrenceFields();
+    syncAllDayFields();
+
+    var saved = null;
+    try { saved = localStorage.getItem(VIEW_KEY); } catch (e) { /* sandboxed */ }
+    switchView(["day", "week", "month", "list"].indexOf(saved) >= 0 ? saved : "week");
+  }
+
+  // The skill's first-paint payload arrives by postMessage; after that the
+  // component reads and writes through Orakle itself.
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || typeof d !== "object") return;
+    if (d.error) { toast(d.error, "err"); return; }
+    if (!Array.isArray(d.events)) return;
+
+    state.events = d.events.slice()
+      .sort(function (a, b) { return String(a.start_dt).localeCompare(b.start_dt); });
+    state.lastAt = Date.now();
+    renderCurrent();
+    tickAge();
+  });
+
+  init();
+})();
+</script>
+</body>
+</html>

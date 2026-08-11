@@ -2244,11 +2244,12 @@ Visit our project site at: https://ainara.app
                 }
                 break;
 
-            case 'showAgenda':
-                if (event.type === 'ui') {
-                    await this.showAgenda();
-                }
-                break;
+            // No 'showAgenda' case: tools_calendar's show_agenda action was
+            // removed once the interactive calendar board existed, so nothing
+            // raises that ui_action any more. showAgenda() itself is still
+            // live — the tray menu's Agenda entry calls it over IPC, which
+            // needs no routing decision. The generic ui_action relay below and
+            // in orakle_middleware stays for any future skill that wants it.
 
             case 'renderNexus':
                 if (event.type === 'ui') {

@@ -42,6 +42,7 @@ Use your built-in knowledge for: general knowledge, definitions, explanations, t
 4. Split complex queries: For deterministic multi-step actions, or for researching multiple topics use multiple, separate ORAKLE commands.
 5. Let user take initiative: Await for a specific user request before using an ORAKLE command.
 6. Avoid comments after ORAKLE queries: wait for the next conversation turn to add additional comments.
+7. Preserve presentation intent: when the user asks to SEE, OPEN, PULL UP, BRING UP, LOOK AT, BROWSE or otherwise DISPLAY something, carry those words through into the ORAKLE query, and never rewrite a request to display something into a request for its underlying data. "Can you pull my calendar up?" must stay "pull up my calendar on screen", NOT become "list all calendar events from Monday to Sunday" — displaying something and reporting its data are handled by different capabilities, and only your query text distinguishes them. Rule 1 does not apply here: adding date ranges, filters or other parameters the user never mentioned converts a display request into a data request and selects the wrong capability.
 {{!
 # COMMENTED
 Complex queries: [..] For iterative/research tasks, capture the entire intent in a single query to spawn a background agent.

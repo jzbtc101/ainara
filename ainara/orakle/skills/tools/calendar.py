@@ -19,6 +19,7 @@
 import json
 import logging
 import platform
+import re
 import subprocess
 import sqlite3
 import tempfile
@@ -57,28 +58,43 @@ _TOAST_PS_SCRIPT_PATH = Path(tempfile.gettempdir()) / "ainara_toast_notify.ps1"
 
 
 class ToolsCalendar(Skill):
-    """Native local calendar with full event and recurrence management"""
+    """Calendar data: answers event questions in words, and creates, updates
+    or deletes events. Does not put the calendar on screen."""
 
+    # This skill and jzb_calendar_events_manager share nearly all of their
+    # domain vocabulary, so the embedding matcher scores them within ~0.03 of
+    # each other on every phrasing and both land in the candidate list. The
+    # selecting LLM is what actually decides between them, and it decides from
+    # this text — hence the explicit "this one is WRONG" steer. This skill has
+    # no on-screen action at all now, so the split is clean: words here,
+    # pixels there.
     matcher_info = (
-        "Use this skill when the user wants to manage calendar events,"
-        " appointments, reminders, or recurring schedules. This skill handles"
-        " creating, reading, updating, and deleting events, as well as setting"
-        " up repeating patterns. Examples include: 'add a meeting Friday 3pm',"
-        " 'what have I got tomorrow?', 'clear my Thursday afternoon',"
-        " 'set up a recurring event every 2 weeks on Tuesday',"
-        " 'remind me every Monday at 9am', 'show me this week',"
-        " 'cancel next Tuesday's appointment', 'edit all future occurrences',"
-        " 'open my agenda', 'pull up my calendar', 'show my agenda on"
-        " screen'.\n\n"
-        "Keywords: calendar, event, appointment, meeting, reminder, schedule,"
-        " recurring, repeat, weekly, monthly, daily, every x weeks, agenda,"
-        " add event, delete event, update event, show week, show month,"
-        " what's on, upcoming, all day, multi-day, recurrence, exception,"
-        " shift pattern, rotation, open agenda, pull up calendar, view"
-        " calendar."
+        "Use this skill to ANSWER questions about the calendar in words, and"
+        " to create, change or cancel events. Prefer it whenever the user"
+        " wants to be TOLD something, or wants an event added, edited or"
+        " deleted. It CANNOT put anything on screen: if the user asks to SEE,"
+        " OPEN, PULL UP, BRING UP, LOOK AT, BROWSE or MANAGE their CALENDAR or"
+        " AGENDA, or asks for a day, week or month view, then"
+        " jzb_calendar_events_manager (the interactive calendar board) is the"
+        " correct skill and this one is WRONG. Examples that belong to THIS"
+        " skill: 'add a meeting Friday 3pm', 'what have I got tomorrow?',"
+        " 'am I free on Thursday?', 'clear my Thursday afternoon', 'set up a"
+        " recurring event every 2 weeks on Tuesday', 'remind me every Monday"
+        " at 9am', 'cancel next Tuesday's appointment', 'edit all future"
+        " occurrences', 'read me my agenda'.\n\n"
+        "Keywords: event, appointment, meeting, reminder, schedule, recurring,"
+        " repeat, weekly, monthly, daily, every x weeks, add event, delete"
+        " event, update event, what's on, upcoming, am I free, all day,"
+        " multi-day, recurrence, exception, shift pattern, rotation,"
+        " read me my agenda."
     )
 
     DB_FILE = "ainara_calendar.db"
+
+    # A subscribed iCal address grants read access to the entire calendar with
+    # no further authentication, so it must never be written to a log — the
+    # framework redacts these before logging the skill's arguments.
+    sensitive_params = ("url",)
 
     RECURRENCE_FREQUENCIES = ["daily", "weekly", "every_x_weeks", "monthly", "custom"]
 
@@ -103,10 +119,12 @@ class ToolsCalendar(Skill):
         check_interval = self.config.get(
             "skills.tools_calendar.reminder_check_interval_minutes", 5
         )
+        # One scheduled job per skill is all the scheduler supports, so the
+        # tick does both jobs: reminders every run, feed sync when due.
         self.default_schedule = {
             "trigger": "interval",
             "minutes": check_interval,
-            "kwargs": {"action": "check_reminders"},
+            "kwargs": {"action": "tick"},
         }
         self._reminder_lookahead_minutes = lookahead
 
@@ -160,7 +178,49 @@ class ToolsCalendar(Skill):
                     notified_at TEXT DEFAULT (datetime('now')),
                     PRIMARY KEY (event_id, start_dt)
                 );
+
+                CREATE TABLE IF NOT EXISTS calendar_feeds (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name         TEXT NOT NULL,
+                    url          TEXT,
+                    kind         TEXT DEFAULT 'url',
+                    color        TEXT,
+                    enabled      INTEGER DEFAULT 1,
+                    horizon_back_days INTEGER DEFAULT 90,
+                    horizon_fwd_days  INTEGER DEFAULT 365,
+                    etag         TEXT,
+                    last_modified TEXT,
+                    last_sync_at TEXT,
+                    last_status  TEXT,
+                    last_error   TEXT,
+                    created_at   TEXT DEFAULT (datetime('now'))
+                );
             """)
+
+            # Migrate existing databases in place: the events table predates
+            # feed import, so add its provenance columns only when missing
+            # (same idiom as green_memories.py). Without 'source' defaulting to
+            # 'local', a sync's delete-sweep could not tell hand-made events
+            # from imported ones.
+            cursor.execute("PRAGMA table_info(events)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if "source" not in columns:
+                self.logger.info("Adding 'source' column to events table.")
+                cursor.execute(
+                    "ALTER TABLE events ADD COLUMN source TEXT"
+                    " NOT NULL DEFAULT 'local'"
+                )
+            if "feed_id" not in columns:
+                self.logger.info("Adding 'feed_id' column to events table.")
+                cursor.execute("ALTER TABLE events ADD COLUMN feed_id INTEGER")
+            if "source_uid" not in columns:
+                self.logger.info("Adding 'source_uid' column to events table.")
+                cursor.execute("ALTER TABLE events ADD COLUMN source_uid TEXT")
+
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_feed"
+                " ON events(feed_id, source_uid, start_dt)"
+            )
             conn.commit()
         finally:
             conn.close()
@@ -540,6 +600,7 @@ class ToolsCalendar(Skill):
         end_dt: Annotated[Optional[str], "New end datetime (ISO format)"] = None,
         description: Annotated[Optional[str], "New description"] = None,
         location: Annotated[Optional[str], "New location"] = None,
+        all_day: Annotated[Optional[bool], "New all-day flag"] = None,
         category: Annotated[Optional[str], "New category"] = None,
         priority: Annotated[Optional[str], "New priority"] = None,
         notes: Annotated[Optional[str], "New notes"] = None,
@@ -572,6 +633,7 @@ class ToolsCalendar(Skill):
             if end_dt:      fields["end_dt"] = end_dt
             if description: fields["description"] = description
             if location:    fields["location"] = location
+            if all_day is not None: fields["all_day"] = int(all_day)
             if category:    fields["category"] = category
             if priority:    fields["priority"] = priority
             if notes:       fields["notes"] = notes
@@ -811,33 +873,432 @@ class ToolsCalendar(Skill):
         finally:
             conn.close()
 
-    async def show_agenda(self) -> Dict[str, Any]:
-        """Requests that the client open its visual Agenda view. This skill
-        cannot open UI itself (it's backend-only); it signals intent via the
-        ui_action marker, which orakle_middleware/chat_manager relay to the
-        frontend as a 'showAgenda' UI event. Polaris fetches its own copy of
-        the events client-side, so what's returned here is only used for the
-        chat confirmation message, not to populate the view."""
-        today = datetime.now()
-        week_ahead = today + timedelta(days=7)
-        events_result = await self.get_events(
-            from_date=today.strftime("%Y-%m-%d"),
-            to_date=week_ahead.strftime("%Y-%m-%d"),
-        )
-        if not events_result.get("success"):
-            return events_result
+    # ─────────────────────────────────────────────
+    # FEED IMPORT (iCal)
+    # ─────────────────────────────────────────────
 
-        count = events_result.get("count", 0)
-        events_result["ui_action"] = "showAgenda"
-        events_result["message"] = (
-            "Here's your agenda." if count
-            else "Opened your agenda — nothing on it for the next 7 days."
+    @staticmethod
+    def _mask_url(url: Optional[str]) -> Optional[str]:
+        """A subscribed iCal address is a bearer credential — anyone holding it
+        can read the whole calendar — so it is never returned in full and never
+        logged."""
+        if not url:
+            return None
+        try:
+            from urllib.parse import urlparse
+            host = urlparse(url).netloc or "?"
+        except Exception:
+            host = "?"
+        return f"{host}/…{url[-6:]}"
+
+    @staticmethod
+    def _scrub(text: Any, *urls: Optional[str]) -> str:
+        """Remove feed URLs from text before storing, logging or returning it.
+
+        A requests failure embeds the full URL in its message
+        ("Max retries exceeded with url: /calendar/ical/…/private-…/basic.ics"),
+        so passing the raw exception through would put the credential into
+        last_error, the log and the API response at once.
+        """
+        out = str(text)
+        for url in urls:
+            if url:
+                out = out.replace(url, "<feed url redacted>")
+        # Catch the path-only form requests uses, and any stray token.
+        out = re.sub(r"private-[A-Za-z0-9_-]{8,}", "private-<redacted>", out)
+        return out
+
+    def _feed_row(self, cursor, feed_id: int) -> Optional[dict]:
+        cursor.execute("SELECT * FROM calendar_feeds WHERE id=?", (feed_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+    def _apply_occurrences(
+        self, cursor, feed_id: int, occurrences: List[dict],
+        window: Optional[tuple] = None,
+    ) -> Dict[str, int]:
+        """Upsert parsed occurrences for one feed, then (for live feeds only)
+        drop rows in the window that the feed no longer contains.
+
+        Every statement here is scoped by feed_id, so events the user created
+        by hand (source='local', feed_id NULL) can never be touched.
+        """
+        seen_ids = []
+        added = updated = 0
+
+        for occ in occurrences:
+            cursor.execute(
+                "SELECT id FROM events"
+                " WHERE feed_id=? AND source_uid=? AND start_dt=?",
+                (feed_id, occ["uid"], occ["start_dt"]),
+            )
+            row = cursor.fetchone()
+
+            if row is None:
+                # Fall back to matching the same occurrence under a DIFFERENT
+                # feed. A UID plus a start time identifies an event globally,
+                # so without this the same calendar imported twice (or an
+                # archive file overlapping a live subscription) would be stored
+                # twice over. The row is reassigned to the feed importing it
+                # now, which lets live data take ownership from a snapshot and
+                # keeps the delete-sweep able to retire it later.
+                cursor.execute(
+                    "SELECT id FROM events"
+                    " WHERE source='feed' AND source_uid=? AND start_dt=?"
+                    " LIMIT 1",
+                    (occ["uid"], occ["start_dt"]),
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    cursor.execute("UPDATE events SET feed_id=? WHERE id=?",
+                                   (feed_id, row["id"]))
+
+            if row:
+                cursor.execute(
+                    "UPDATE events SET title=?, description=?, location=?,"
+                    " end_dt=?, all_day=?, updated_at=? WHERE id=?",
+                    (occ["title"], occ.get("description"), occ.get("location"),
+                     occ["end_dt"], int(occ["all_day"]),
+                     datetime.now().isoformat(), row["id"]),
+                )
+                seen_ids.append(row["id"])
+                updated += 1
+            else:
+                cursor.execute(
+                    "INSERT INTO events"
+                    " (title, description, location, start_dt, end_dt,"
+                    "  all_day, category, priority, source, feed_id, source_uid)"
+                    " VALUES (?,?,?,?,?,?,?,?,'feed',?,?)",
+                    (occ["title"], occ.get("description"), occ.get("location"),
+                     occ["start_dt"], occ["end_dt"], int(occ["all_day"]),
+                     "other", "normal", feed_id, occ["uid"]),
+                )
+                seen_ids.append(cursor.lastrowid)
+                added += 1
+
+        removed = 0
+        if window is not None:
+            lo, hi = window
+            placeholders = ",".join("?" * len(seen_ids)) if seen_ids else "NULL"
+            cursor.execute(
+                f"DELETE FROM events WHERE feed_id=? AND start_dt>=? AND"
+                f" start_dt<=? AND id NOT IN ({placeholders})",
+                (feed_id, lo.isoformat(), hi.isoformat(), *seen_ids),
+            )
+            removed = cursor.rowcount
+
+        return {"added": added, "updated": updated, "removed": removed}
+
+    def _sync_feed(self, cursor, feed: dict) -> Dict[str, Any]:
+        """Fetch and apply one live URL feed."""
+        import requests
+
+        from .calendar_lib.ics import parse_ics, read_ics_bytes
+
+        headers = {}
+        if feed.get("etag"):
+            headers["If-None-Match"] = feed["etag"]
+        if feed.get("last_modified"):
+            headers["If-Modified-Since"] = feed["last_modified"]
+
+        resp = requests.get(feed["url"], headers=headers, timeout=30)
+        if resp.status_code == 304:
+            cursor.execute(
+                "UPDATE calendar_feeds SET last_sync_at=?, last_status=?,"
+                " last_error=NULL WHERE id=?",
+                (datetime.now().isoformat(), "unchanged", feed["id"]),
+            )
+            return {"feed": feed["name"], "status": "unchanged"}
+        resp.raise_for_status()
+
+        now = datetime.now()
+        back = feed.get("horizon_back_days")
+        fwd = feed.get("horizon_fwd_days")
+        lo = now - timedelta(days=90 if back is None else int(back))
+        hi = now + timedelta(days=365 if fwd is None else int(fwd))
+
+        occurrences, stats = parse_ics(read_ics_bytes(resp.content), lo, hi)
+        counts = self._apply_occurrences(
+            cursor, feed["id"], occurrences, window=(lo, hi)
         )
-        return events_result
+
+        cursor.execute(
+            "UPDATE calendar_feeds SET last_sync_at=?, last_status=?,"
+            " last_error=NULL, etag=?, last_modified=? WHERE id=?",
+            (now.isoformat(), "ok", resp.headers.get("ETag"),
+             resp.headers.get("Last-Modified"), feed["id"]),
+        )
+        return {"feed": feed["name"], "status": "ok", **counts, "parsed": stats}
+
+    async def add_feed(
+        self,
+        url: Annotated[str, "The calendar's iCal URL (Google: Settings ->"
+                            " Integrate calendar -> Secret address in iCal"
+                            " format)"],
+        name: Annotated[Optional[str], "A label for this calendar"] = None,
+        horizon_back_days: Annotated[Optional[int], "How far back to import"] = 90,
+        horizon_fwd_days: Annotated[Optional[int], "How far ahead to import"] = 365,
+    ) -> Dict[str, Any]:
+        """Subscribe to an iCal feed and sync it immediately."""
+        if not url or not url.lower().startswith(("http://", "https://")):
+            return {"success": False, "error": "A http(s) iCal URL is required"}
+
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            # `or 90` would turn a deliberate 0 ("upcoming only") back into 90
+            # days of history, so test for None explicitly.
+            back = 90 if horizon_back_days is None else int(horizon_back_days)
+            fwd = 365 if horizon_fwd_days is None else int(horizon_fwd_days)
+            cursor.execute(
+                "INSERT INTO calendar_feeds"
+                " (name, url, kind, horizon_back_days, horizon_fwd_days)"
+                " VALUES (?,?,'url',?,?)",
+                (name or "Imported calendar", url, back, fwd),
+            )
+            feed_id = cursor.lastrowid
+            conn.commit()
+
+            feed = self._feed_row(cursor, feed_id)
+            try:
+                result = self._sync_feed(cursor, feed)
+                conn.commit()
+            except Exception as e:
+                safe = self._scrub(e, url)[:500]
+                cursor.execute(
+                    "UPDATE calendar_feeds SET last_sync_at=?, last_status=?,"
+                    " last_error=? WHERE id=?",
+                    (datetime.now().isoformat(), "error", safe, feed_id),
+                )
+                conn.commit()
+                self.logger.error(f"CALENDAR feed add: first sync failed: {safe}")
+                return {"success": False, "feed_id": feed_id,
+                        "error": "Feed added but the first sync failed",
+                        "details": safe}
+
+            return {"success": True, "feed_id": feed_id, **result}
+        finally:
+            conn.close()
+
+    async def list_feeds(self) -> Dict[str, Any]:
+        """List subscribed calendars. URLs come back masked."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT f.*, (SELECT COUNT(*) FROM events e WHERE e.feed_id=f.id)"
+                " AS event_count FROM calendar_feeds f ORDER BY f.id"
+            )
+            feeds = []
+            for row in cursor.fetchall():
+                f = dict(row)
+                f["url"] = self._mask_url(f.get("url"))
+                feeds.append(f)
+            return {"success": True, "count": len(feeds), "feeds": feeds}
+        finally:
+            conn.close()
+
+    async def remove_feed(
+        self,
+        feed_id: Annotated[int, "ID of the feed to remove"],
+        keep_events: Annotated[Optional[bool],
+                               "Keep already-imported events"] = False,
+    ) -> Dict[str, Any]:
+        """Remove a feed, and by default the events it imported."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            if keep_events:
+                cursor.execute(
+                    "UPDATE events SET feed_id=NULL, source='local'"
+                    " WHERE feed_id=?", (feed_id,))
+                detached = cursor.rowcount
+                removed = 0
+            else:
+                cursor.execute("DELETE FROM events WHERE feed_id=?", (feed_id,))
+                removed = cursor.rowcount
+                detached = 0
+            cursor.execute("DELETE FROM calendar_feeds WHERE id=?", (feed_id,))
+            gone = cursor.rowcount > 0
+            conn.commit()
+            if not gone:
+                return {"success": False, "error": f"Feed {feed_id} not found"}
+            return {"success": True, "events_removed": removed,
+                    "events_kept": detached}
+        finally:
+            conn.close()
+
+    async def set_feed_enabled(
+        self,
+        feed_id: Annotated[int, "ID of the feed"],
+        enabled: Annotated[bool, "Whether the feed should keep syncing"],
+    ) -> Dict[str, Any]:
+        """Enable or disable automatic syncing for a feed."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE calendar_feeds SET enabled=? WHERE id=?",
+                           (int(bool(enabled)), feed_id))
+            conn.commit()
+            if cursor.rowcount == 0:
+                return {"success": False, "error": f"Feed {feed_id} not found"}
+            return {"success": True, "feed_id": feed_id,
+                    "enabled": bool(enabled)}
+        finally:
+            conn.close()
+
+    async def sync_feeds(
+        self,
+        feed_id: Annotated[Optional[int],
+                           "Sync only this feed; omit for all enabled"] = None,
+    ) -> Dict[str, Any]:
+        """Fetch every enabled URL feed and apply the changes."""
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            if feed_id is not None:
+                cursor.execute(
+                    "SELECT * FROM calendar_feeds WHERE id=? AND kind='url'",
+                    (feed_id,))
+            else:
+                cursor.execute(
+                    "SELECT * FROM calendar_feeds"
+                    " WHERE enabled=1 AND kind='url' AND url IS NOT NULL")
+            feeds = [dict(r) for r in cursor.fetchall()]
+
+            results = []
+            for feed in feeds:
+                try:
+                    results.append(self._sync_feed(cursor, feed))
+                    conn.commit()
+                except Exception as e:
+                    conn.rollback()
+                    # The exception text itself carries the URL, so scrub it
+                    # before it reaches the DB, the log or the caller.
+                    safe = self._scrub(e, feed.get("url"))[:500]
+                    cursor.execute(
+                        "UPDATE calendar_feeds SET last_sync_at=?,"
+                        " last_status=?, last_error=? WHERE id=?",
+                        (datetime.now().isoformat(), "error",
+                         safe, feed["id"]),
+                    )
+                    conn.commit()
+                    self.logger.error(
+                        f"CALENDAR sync failed for feed '{feed['name']}': {safe}")
+                    results.append({"feed": feed["name"], "status": "error",
+                                    "error": safe})
+            return {"success": True, "synced": len(results), "results": results}
+        finally:
+            conn.close()
+
+    async def import_file(
+        self,
+        path: Annotated[str, "Path to an .ics file, or a .zip export"
+                             " containing one"],
+        name: Annotated[Optional[str], "Label for the imported calendar"] = None,
+    ) -> Dict[str, Any]:
+        """Import a calendar file once.
+
+        Unlike a subscribed feed this has no rolling horizon and never deletes:
+        a snapshot says nothing about what has since been removed upstream, so
+        sweeping against it would destroy history. Used for backfilling an
+        export that reaches further back than a live feed's window.
+        """
+        from pathlib import Path as _Path
+
+        from .calendar_lib.ics import parse_ics, read_ics_bytes
+
+        src = _Path(path).expanduser()
+        if not src.is_file():
+            return {"success": False, "error": f"File not found: {src}"}
+
+        try:
+            text = read_ics_bytes(src.read_bytes())
+        except Exception as e:
+            return {"success": False, "error": "Could not read calendar file",
+                    "details": str(e)}
+
+        # Wide but bounded: unbounded rules are capped per-event by the parser.
+        lo = datetime(1970, 1, 1)
+        hi = datetime.now() + timedelta(days=730)
+
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO calendar_feeds (name, url, kind, enabled)"
+                " VALUES (?, NULL, 'file', 0)",
+                (name or src.stem,),
+            )
+            feed_id = cursor.lastrowid
+
+            occurrences, stats = parse_ics(text, lo, hi)
+            counts = self._apply_occurrences(cursor, feed_id, occurrences)
+
+            cursor.execute(
+                "UPDATE calendar_feeds SET last_sync_at=?, last_status='ok'"
+                " WHERE id=?", (datetime.now().isoformat(), feed_id))
+            conn.commit()
+            return {"success": True, "feed_id": feed_id,
+                    "source": src.name, **counts, "parsed": stats}
+        except Exception as e:
+            conn.rollback()
+            self.logger.error(f"CALENDAR import_file failed: {e}")
+            return {"success": False, "error": "Import failed",
+                    "details": str(e)}
+        finally:
+            conn.close()
+
+    async def _sync_due_feeds(self) -> Dict[str, Any]:
+        """Sync feeds whose interval has elapsed.
+
+        The scheduler registers exactly one default_schedule per skill
+        (orakle/scheduler.py), so feed syncing rides along with the reminder
+        tick rather than owning a second job, and gates itself on elapsed time.
+        """
+        interval = self.config.get(
+            "skills.tools_calendar.feed_sync_interval_minutes", 30
+        )
+        cutoff = datetime.now() - timedelta(minutes=interval)
+
+        conn = self._get_conn()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM calendar_feeds WHERE enabled=1 AND kind='url'"
+                " AND url IS NOT NULL AND (last_sync_at IS NULL OR last_sync_at<?)",
+                (cutoff.isoformat(),),
+            )
+            due = [row["id"] for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+        if not due:
+            return {"success": True, "synced": 0, "results": []}
+
+        results = []
+        for fid in due:
+            results.append(await self.sync_feeds(feed_id=fid))
+        return {"success": True, "synced": len(due), "results": results}
+
+    async def tick(self) -> Dict[str, Any]:
+        """Scheduled heartbeat: fire due reminders, then sync due feeds."""
+        reminders = await self.check_reminders()
+        feeds = await self._sync_due_feeds()
+        return {"success": True, "reminders": reminders, "feeds": feeds}
+
+    # NOTE: this skill deliberately has no action that puts anything on
+    # screen. It used to expose 'show_agenda', which raised a ui_action marker
+    # to open Polaris's markdown Agenda view — but once the interactive
+    # calendar board (jzb_calendar_events_manager) existed, two selectable
+    # skills both claimed "show me my calendar" and the LLM could only guess
+    # between them. The board supersedes that view, so the action was removed
+    # rather than disambiguated. Polaris's Agenda view itself is still
+    # reachable from the tray menu, which needs no routing decision.
 
     async def run(
         self,
-        action: Annotated[str, "Action to perform: create/create_recurring/get/update/delete/check_reminders/show_agenda"],
+        action: Annotated[str, "Action to perform: create/create_recurring/get/update/delete/check_reminders/tick/add_feed/list_feeds/remove_feed/set_feed_enabled/sync_feeds/import_file"],
         title: Annotated[Optional[str], "Event title"] = None,
         start_dt: Annotated[Optional[str], "Start datetime ISO format"] = None,
         end_dt: Annotated[Optional[str], "End datetime ISO format"] = None,
@@ -851,8 +1312,11 @@ class ToolsCalendar(Skill):
         max_count: Annotated[Optional[int], "Max recurrence count"] = None,
         description: Annotated[Optional[str], "Event description"] = None,
         location: Annotated[Optional[str], "Event location"] = None,
-        all_day: Annotated[Optional[bool], "All day event flag"] = False,
-        category: Annotated[Optional[str], "Event category"] = "personal",
+        all_day: Annotated[Optional[bool], "All day event flag"] = None,
+        # Must default to None, not "personal": this same argument doubles as
+        # the filter for action="get", where a default would silently hide
+        # every event in any other category.
+        category: Annotated[Optional[str], "Event category"] = None,
         priority: Annotated[Optional[str], "Event priority"] = "normal",
         notes: Annotated[Optional[str], "Event notes"] = None,
         edit_mode: Annotated[Optional[str], "Edit mode for recurring: this_only/all_future/all"] = "this_only",
@@ -862,6 +1326,25 @@ class ToolsCalendar(Skill):
             " action='update' or action='delete' with edit_mode='this_only'"
             " or 'all_future' on a recurring event",
         ] = None,
+        url: Annotated[Optional[str], "iCal feed URL for action='add_feed'"] = None,
+        name: Annotated[Optional[str], "Label for a feed or imported file"] = None,
+        feed_id: Annotated[Optional[int], "Feed ID for feed actions"] = None,
+        enabled: Annotated[Optional[bool], "For action='set_feed_enabled'"] = None,
+        keep_events: Annotated[
+            Optional[bool],
+            "For action='remove_feed': keep the imported events instead of"
+            " deleting them along with the feed",
+        ] = False,
+        horizon_back_days: Annotated[
+            Optional[int], "For action='add_feed': how far back to import"
+        ] = 90,
+        horizon_fwd_days: Annotated[
+            Optional[int], "For action='add_feed': how far ahead to import"
+        ] = 365,
+        path: Annotated[
+            Optional[str],
+            "For action='import_file': path to an .ics file or a .zip export",
+        ] = None,
     ) -> Dict[str, Any]:
         """
         Main calendar skill entry point. Routes to the correct action.
@@ -869,8 +1352,7 @@ class ToolsCalendar(Skill):
         Examples:
             action="create", title="Team standup", start_dt="2026-07-28T09:00", end_dt="2026-07-28T09:30"
             action="create_recurring", title="Night Shift", frequency="every_x_weeks", interval=9
-            action="get", from_date="2026-07-28", to_date="2026-08-03"  # spoken/text answer about events, does not open any UI
-            action="show_agenda"  # opens the visual Agenda view in Polaris; use when the user asks to see/open/pull up their agenda or calendar, not just what's on it
+            action="get", from_date="2026-07-28", to_date="2026-08-03"  # spoken/text answer about events; opens no UI
             action="update", event_id=5, title="Updated title", edit_mode="this_only", occurrence_dt="2026-08-04T09:00:00"
             action="update", event_id=5, start_dt="2026-08-11T10:00", edit_mode="all_future", occurrence_dt="2026-08-11T09:00:00"
             action="delete", event_id=5, delete_mode="all"
@@ -882,7 +1364,7 @@ class ToolsCalendar(Skill):
             return await self.create_event(
                 title=title, start_dt=start_dt, end_dt=end_dt,
                 description=description, location=location,
-                all_day=all_day, category=category,
+                all_day=bool(all_day), category=category or "personal",
                 priority=priority, notes=notes,
             )
         elif action == "create_recurring":
@@ -891,7 +1373,7 @@ class ToolsCalendar(Skill):
                 frequency=frequency, interval=interval,
                 days_of_week=days_of_week, end_date=end_date,
                 max_count=max_count, description=description,
-                location=location, category=category,
+                location=location, category=category or "personal",
                 priority=priority, notes=notes,
             )
         elif action == "get":
@@ -902,7 +1384,7 @@ class ToolsCalendar(Skill):
             return await self.update_event(
                 event_id=event_id, title=title, start_dt=start_dt,
                 end_dt=end_dt, description=description, location=location,
-                category=category, priority=priority, notes=notes,
+                all_day=all_day, category=category, priority=priority, notes=notes,
                 edit_mode=edit_mode, occurrence_dt=occurrence_dt,
             )
         elif action == "delete":
@@ -912,14 +1394,38 @@ class ToolsCalendar(Skill):
             )
         elif action == "check_reminders":
             return await self.check_reminders()
-        elif action == "show_agenda":
-            return await self.show_agenda()
+        elif action == "tick":
+            return await self.tick()
+        elif action == "add_feed":
+            return await self.add_feed(
+                url=url, name=name,
+                horizon_back_days=horizon_back_days,
+                horizon_fwd_days=horizon_fwd_days,
+            )
+        elif action == "list_feeds":
+            return await self.list_feeds()
+        elif action == "remove_feed":
+            return await self.remove_feed(
+                feed_id=int(feed_id), keep_events=bool(keep_events)
+            )
+        elif action == "set_feed_enabled":
+            return await self.set_feed_enabled(
+                feed_id=int(feed_id), enabled=bool(enabled)
+            )
+        elif action == "sync_feeds":
+            return await self.sync_feeds(
+                feed_id=int(feed_id) if feed_id is not None else None
+            )
+        elif action == "import_file":
+            return await self.import_file(path=path, name=name)
         else:
             return {
                 "success": False,
                 "error": f"Unknown action '{action}'",
                 "valid_actions": [
                     "create", "create_recurring", "get", "update", "delete",
-                    "check_reminders", "show_agenda",
+                    "check_reminders", "tick", "add_feed", "list_feeds",
+                    "remove_feed", "set_feed_enabled", "sync_feeds",
+                    "import_file",
                 ],
             }
