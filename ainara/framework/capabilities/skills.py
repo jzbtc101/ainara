@@ -58,6 +58,34 @@ class BasePythonSkillProvider(CapabilityProvider):
         self.capabilities: Dict[str, Dict[str, Any]] = {}
         self.load_errors: list = []
 
+    # Argument names never safe to write to a log. A skill can extend this
+    # with a class-level `sensitive_params` tuple for anything domain-specific
+    # (tools_calendar's feed `url` is a bearer credential, for instance).
+    SENSITIVE_ARG_NAMES = (
+        "api_key", "apikey", "secret", "password", "passwd", "token",
+        "credential", "credentials", "auth",
+    )
+
+    @classmethod
+    def _mask_arguments(cls, instance, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Redact credential-bearing arguments before they reach the log.
+
+        This log line records every skill call, so anything secret passed as a
+        parameter would otherwise sit in plain text in orakle.log for as long
+        as the file is kept.
+        """
+        if not isinstance(arguments, dict):
+            return arguments
+        extra = tuple(getattr(instance, "sensitive_params", ()) or ())
+        masked = {}
+        for key, value in arguments.items():
+            lowered = str(key).lower()
+            if key in extra or any(s in lowered for s in cls.SENSITIVE_ARG_NAMES):
+                masked[key] = "***redacted***"
+            else:
+                masked[key] = value
+        return masked
+
     def execute(self, name: str, arguments: Dict[str, Any]) -> Any:
         """Execute a skill."""
 
@@ -88,7 +116,11 @@ class BasePythonSkillProvider(CapabilityProvider):
         if not (run_method and callable(run_method)):
             raise TypeError(f"Skill '{name}' has no callable 'run' method.")
 
-        logger.info(f"Executing skill: {name} with args: {arguments}")
+
+        logger.info(
+            f"Executing skill: {name} with args:"
+            f" {self._mask_arguments(instance, arguments)}"
+        )
         try:
             if inspect.iscoroutinefunction(run_method):
                 loop = None

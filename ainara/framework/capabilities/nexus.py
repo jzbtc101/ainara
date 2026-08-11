@@ -60,7 +60,11 @@ class NexusSkillProvider(BasePythonSkillProvider):
 
     def discover(self) -> Dict[str, Dict[str, Any]]:
         """Discover and load skills from Nexus bundles."""
-        self.capabilities = {}
+        # Accumulate locally: the inherited discover() called per bundle below
+        # rebinds self.capabilities to a fresh dict each time, so accumulating
+        # onto the attribute would leave only the last bundle scanned — and an
+        # empty trailing bundle would discard everything found before it.
+        discovered: Dict[str, Dict[str, Any]] = {}
         logger.info(f"Scanning for Nexus bundles in: {self.nexus_path}")
 
         for vendor_dir in self.nexus_path.iterdir():
@@ -155,8 +159,9 @@ class NexusSkillProvider(BasePythonSkillProvider):
                             "No '_components' directory found for bundle"
                             f" '{bundle_dir.name}'."
                         )
-                    self.capabilities.update(bundle_caps)
+                    discovered.update(bundle_caps)
 
+        self.capabilities = discovered
         logger.info(f"Loaded {len(self.capabilities)} nexus skills.")
         return self.capabilities
 

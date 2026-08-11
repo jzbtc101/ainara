@@ -279,6 +279,16 @@ class CapabilitiesManager:
                 info["bundle"] = cap_data.get("bundle")
                 if "ui" in cap_data:
                     info["ui"] = cap_data["ui"]
+                # Nexus skills are registered into the SAME semantic matcher as
+                # native skills, so matcher_info has to flow through here too —
+                # otherwise a nexus skill can only ever be matched on its id and
+                # docstring and its matcher_info is silently inert.
+                info["matcher_info"] = cap_data.get("matcher_info", "")
+                embeddings_boost_factor = cap_data.get(
+                    "embeddings_boost_factor", 1.0
+                )
+                if embeddings_boost_factor != 1.0:
+                    info["embeddings_boost_factor"] = embeddings_boost_factor
 
             # Expose default schedule only in 'full' mode
             if view_mode == "full":
