@@ -401,10 +401,18 @@ class EmailConnector(BaseConnector):
         if not (smtp_host and username and password):
             raise ValueError("Missing SMTP config for primary account")
 
+        # Symbolic targets such as Bureau's "conductor_notifications" are not
+        # addresses; deliver those to the sending account itself.
+        recipient = target_id if "@" in target_id else username
+
         message = MIMEText(content)
         message["From"] = username
-        message["To"] = target_id
-        message["Subject"] = "Message from Ainara"  # Default subject
+        message["To"] = recipient
+        message["Subject"] = (
+            "Message from Ainara"
+            if recipient == target_id
+            else f"Ainara: {target_id.replace('_', ' ')}"
+        )
 
         try:
             await aiosmtplib.send(
@@ -416,7 +424,7 @@ class EmailConnector(BaseConnector):
                 use_tls=True if smtp_port == 465 else False,
                 start_tls=True if smtp_port == 587 else False,
             )
-            return {"status": "sent", "target": target_id}
+            return {"status": "sent", "target": recipient}
         except Exception as e:
             logger.error(f"Failed to send email: {e}")
             raise e
