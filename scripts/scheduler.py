@@ -219,6 +219,35 @@ def log_error(msg):
     print(f"[{timestamp}] ERROR: {msg}", file=sys.stderr)
 
 
+def disable_console_quick_edit():
+    """Stop a click in the console window from freezing the scheduler.
+
+    With QuickEdit on (the Windows default), clicking or selecting text in
+    the console blocks the next write to it until the selection ends. The
+    watchdog heartbeat and log streaming write constantly, so one stray
+    click stalls health checks and cron triggers for as long as the
+    selection stays open.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return  # no attached console (redirected/Electron-managed run)
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+        kernel32.SetConsoleMode(
+            handle,
+            (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS,
+        )
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -1028,6 +1057,7 @@ def main():
 
     # --- Main mode: start services + watchdog + scheduler ---
     acquire_pid_lock()
+    disable_console_quick_edit()
     log_info("Ainara Sentinel Scheduler starting...")
     log_info(f"Using Python: {sys.executable}")
 
